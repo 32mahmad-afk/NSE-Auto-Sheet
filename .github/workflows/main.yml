@@ -1,0 +1,30 @@
+name: FNO Scanner
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0/15 17-23 * * 1-5'
+
+jobs:
+  update-sheet:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Requirements
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Scanner
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: python update_sheet.py
+        timeout-minutes: 20
