@@ -497,7 +497,77 @@ def fetch_delivery_data(actual_date):
     except Exception as e:
         print(f"❌ Delivery Error: {e}")
         return None
+HTF_PRD = 10
+ZONE_PER = 0.2
 
+def last_pivot_high(series, left=10, right=10):
+    series = series.dropna().reset_index(drop=True)
+
+    if len(series) < left + right + 1:
+        return np.nan
+
+    ph = np.nan
+
+    for i in range(left, len(series) - right):
+        window = series.iloc[i-left:i+right+1]
+
+        if series.iloc[i] == window.max():
+            ph = float(series.iloc[i])
+
+    return ph
+
+
+def last_pivot_low(series, left=10, right=10):
+    series = series.dropna().reset_index(drop=True)
+
+    if len(series) < left + right + 1:
+        return np.nan
+
+    pl = np.nan
+
+    for i in range(left, len(series) - right):
+        window = series.iloc[i-left:i+right+1]
+
+        if series.iloc[i] == window.min():
+            pl = float(series.iloc[i])
+
+    return pl
+
+
+def get_htf_zone(df, rule):
+    temp = df.copy()
+
+    temp["DATE"] = pd.to_datetime(temp["DATE"], errors="coerce")
+    temp = temp.dropna(subset=["DATE"])
+
+    if temp.empty:
+        return np.nan, np.nan, np.nan, np.nan
+
+    htf = (
+        temp.set_index("DATE")
+        .resample(rule)
+        .agg({
+            "HIGH": "max",
+            "LOW": "min",
+            "CLOSE": "last"
+        })
+        .dropna()
+        .reset_index()
+    )
+
+    if len(htf) < HTF_PRD * 2 + 1:
+        return np.nan, np.nan, np.nan, np.nan
+
+    ph = last_pivot_high(htf["HIGH"], HTF_PRD, HTF_PRD)
+    pl = last_pivot_low(htf["LOW"], HTF_PRD, HTF_PRD)
+
+    supply_top = ph
+    supply_bot = ph - (ph * ZONE_PER / 100) if not np.isnan(ph) else np.nan
+
+    demand_bot = pl
+    demand_top = pl + (pl * ZONE_PER / 100) if not np.isnan(pl) else np.nan
+
+    return supply_top, supply_bot, demand_top, demand_bot
 
 # =========================================================
 # MAIN EXECUTION
@@ -559,34 +629,25 @@ for symbol, data in hist_prices.groupby("SYMBOL"):
     # =====================================================
 
     d_sup_top, d_sup_bot, d_dem_top, d_dem_bot = get_htf_zone(data, "D")
-    w_sup_top, w_sup_bot, w_dem_top, w_dem_bot = get_htf_zone(data, "W")
-    m_sup_top, m_sup_bot, m_dem_top, m_dem_bot = get_htf_zone(data, "M")
+w_sup_top, w_sup_bot, w_dem_top, w_dem_bot = get_htf_zone(data, "W")
+m_sup_top, m_sup_bot, m_dem_top, m_dem_bot = get_htf_zone(data, "ME")
 
-    last_close = data["CLOSE"].iloc[-1]
+last_close = data["CLOSE"].iloc[-1]
 
-    demand_hit = (
-        (not np.isnan(d_dem_bot) and d_dem_bot <= last_close <= d_dem_top)
-        or
-        (not np.isnan(w_dem_bot) and w_dem_bot <= last_close <= w_dem_top)
-        or
-        (not np.isnan(m_dem_bot) and m_dem_bot <= last_close <= m_dem_top)
-    )
+demand_hit = (
+    (not np.isnan(d_dem_bot) and d_dem_bot <= last_close <= d_dem_top) or
+    (not np.isnan(w_dem_bot) and w_dem_bot <= last_close <= w_dem_top) or
+    (not np.isnan(m_dem_bot) and m_dem_bot <= last_close <= m_dem_top)
+)
 
-    supply_hit = (
-        (not np.isnan(d_sup_bot) and d_sup_bot <= last_close <= d_sup_top)
-        or
-        (not np.isnan(w_sup_bot) and w_sup_bot <= last_close <= w_sup_top)
-        or
-        (not np.isnan(m_sup_bot) and m_sup_bot <= last_close <= m_sup_top)
-    )
+supply_hit = (
+    (not np.isnan(d_sup_bot) and d_sup_bot <= last_close <= d_sup_top) or
+    (not np.isnan(w_sup_bot) and w_sup_bot <= last_close <= w_sup_top) or
+    (not np.isnan(m_sup_bot) and m_sup_bot <= last_close <= m_sup_top)
+)
 
-    data["NEAR_DEMAND_ZONE"] = (
-        "YES" if demand_hit else "NO"
-    )
-
-    data["NEAR_SUPPLY_ZONE"] = (
-        "YES" if supply_hit else "NO"
-    )
+data["NEAR_DEMAND_ZONE"] = "YES" if demand_hit else "NO"
+data["NEAR_SUPPLY_ZONE"] = "YES" if supply_hit else "NO"
 
     # =====================================================
     # PRICE CHANGE
