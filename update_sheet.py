@@ -1,0 +1,873 @@
+import os
+import json
+import sys
+import io
+import zipfile
+import requests
+import gspread
+import pandas as pd
+import numpy as np
+
+from datetime import datetime, timedelta
+from oauth2client.service_account import ServiceAccountCredentials
+
+CONFIG = {
+    "SPREADSHEET_KEY": "1zzEuAn8rXujdqCYTdHrZW67Bg-7vLh_Ho58hzg969_E",
+    "EMA_LEN": 21,
+    "RSI_LEN": 10,
+    "HISTORICAL_DAYS": 200,
+}
+
+print("🚀 Swing Institutional Scanner Started...")
+
+# =========================================================
+# AUTO DATE
+# =========================================================
+
+#def get_latest_trading_date():
+   # today = datetime.now()
+
+    #for i in range(10):
+       # test_date = today - timedelta(days=i)
+
+        #if test_date.weekday() < 5:
+            #return test_date
+
+    #return today
+
+
+#target_date = get_latest_trading_date()
+#fetched_date_str = target_date.strftime("%d-%b-%Y")
+
+#print(f"📅 Using Date: {fetched_date_str}")
+target_date = datetime(2026, 5, 20)
+fetched_date_str = target_date.strftime("%d-%b-%Y")
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+# =========================================================
+# GOOGLE SHEET SETUP
+# =========================================================
+
+print("🔐 STARTING GOOGLE AUTH")
+
+creds_json = os.environ.get("GCP_CREDENTIALS")
+
+if not creds_json:
+    raise Exception("❌ GCP_CREDENTIALS environment variable not found!")
+
+try:
+    creds_dict = json.loads(creds_json)
+
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(
+        creds_dict,
+        scope
+    )
+
+    client = gspread.authorize(creds)
+
+    spreadsheet = client.open_by_key(CONFIG["SPREADSHEET_KEY"])
+
+    try:
+        worksheet_top = spreadsheet.worksheet("TOP 250")
+    except:
+        worksheet_top = spreadsheet.add_worksheet(
+            title="TOP 250",
+            rows=1000,
+            cols=100
+        )
+
+    try:
+        worksheet_final = spreadsheet.worksheet("FINAL LIST")
+    except:
+        worksheet_final = spreadsheet.add_worksheet(
+            title="FINAL LIST",
+            rows=1000,
+            cols=100
+        )
+
+    worksheet_analysis = None
+
+    for ws in spreadsheet.worksheets():
+        if ws.title.strip().upper() == "DATA ANALYSIS":
+            worksheet_analysis = ws
+            break
+
+    if worksheet_analysis is None:
+        worksheet_analysis = spreadsheet.add_worksheet(
+            title="DATA ANALYSIS",
+            rows=1000,
+            cols=100
+        )
+
+    print("✅ GOOGLE SHEET CONNECTED")
+
+except Exception as e:
+    print(f"❌ Google Sheet Error: {e}")
+    sys.exit(1)
+
+
+# =========================================================
+# HELPERS
+# =========================================================
+
+def get_previous_trading_day(date_obj, days_back=0):
+    date = date_obj
+    found = 0
+
+    while True:
+        if date.weekday() < 5:
+            if found == days_back:
+                return date
+            found += 1
+
+        date -= timedelta(days=1)
+
+
+def calc_ema(series, length):
+    return series.ewm(
+        span=length,
+        adjust=False,
+        min_periods=length
+    ).mean()
+
+
+def calc_rsi(series, length):
+    delta = series.diff()
+
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+
+    avg_gain = gain.ewm(
+        alpha=1 / length,
+        adjust=False,
+        min_periods=length
+    ).mean()
+
+    avg_loss = loss.ewm(
+        alpha=1 / length,
+        adjust=False,
+        min_periods=length
+    ).mean()
+
+    rs = avg_gain / avg_loss
+
+    rsi = 100 - (100 / (1 + rs))
+
+    return rsi.replace([np.inf, -np.inf], np.nan)
+
+
+# =========================================================
+# HISTORICAL CASH DATA
+# =========================================================
+
+def fetch_historical_prices(target_date, days=CONFIG["HISTORICAL_DAYS"]):
+
+    print(f"📥 Fetching Last {days} Trading Days Cash Data...")
+
+    all_data = []
+    count = 0
+    i = 0
+
+    while count < days and i < 350:
+
+        curr_date = get_previous_trading_day(target_date, i)
+
+        try:
+            date_str = curr_date.strftime("%Y%m%d")
+
+            url = (
+                "https://nsearchives.nseindia.com/content/cm/"
+                f"BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
+            )
+
+            response = requests.get(
+                url,
+                headers=HEADERS,
+                timeout=20
+            )
+
+            if response.status_code != 200:
+                i += 1
+                continue
+
+            with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                with z.open(z.namelist()[0]) as f:
+                    df = pd.read_csv(f)
+
+            sym_col = next((c for c in ["TckrSymb", "SYMBOL"] if c in df.columns), None)
+            open_col = next((c for c in ["OpnPric", "OPEN"] if c in df.columns), None)
+            high_col = next((c for c in ["HghPric", "HIGH"] if c in df.columns), None)
+            low_col = next((c for c in ["LwPric", "LOW"] if c in df.columns), None)
+            close_col = next((c for c in ["ClsPric", "CLOSE"] if c in df.columns), None)
+            vol_col = next((c for c in ["TtlTradgVol", "TOTTRDQTY"] if c in df.columns), None)
+            series_col = next((c for c in ["SctySrs", "SERIES"] if c in df.columns), None)
+
+            if not all([sym_col, open_col, high_col, low_col, close_col, vol_col, series_col]):
+                i += 1
+                continue
+
+            df = df[
+                df[series_col].astype(str).str.strip() == "EQ"
+            ].copy()
+
+            df = df[
+                [sym_col, open_col, high_col, low_col, close_col, vol_col]
+            ].copy()
+
+            df.columns = [
+                "SYMBOL",
+                "OPEN",
+                "HIGH",
+                "LOW",
+                "CLOSE",
+                "CASH_VOLUME"
+            ]
+
+            df["DATE"] = curr_date.strftime("%Y-%m-%d")
+            df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
+
+            for col in ["OPEN", "HIGH", "LOW", "CLOSE", "CASH_VOLUME"]:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+            all_data.append(df)
+            count += 1
+
+            print(f"   ✅ {curr_date.strftime('%d-%b')} loaded")
+
+        except Exception as e:
+            print(f"   ❌ Cash Error {curr_date.strftime('%d-%b')}: {e}")
+
+        i += 1
+
+    if not all_data:
+        return None
+
+    combined = pd.concat(all_data, ignore_index=True)
+
+    print(f"✅ Historical Data Loaded: {len(combined)} records")
+
+    return combined
+
+
+# =========================================================
+# FUTURES DATA
+# =========================================================
+
+def fetch_fo_data(target_date):
+
+    print("\n📥 Searching Latest Futures Data...")
+
+    for attempt in range(20):
+
+        curr_date = get_previous_trading_day(target_date, attempt)
+
+        try:
+            date_str = curr_date.strftime("%Y%m%d")
+
+            url = (
+                "https://nsearchives.nseindia.com/content/fo/"
+                f"BhavCopy_NSE_FO_0_0_0_{date_str}_F_0000.csv.zip"
+            )
+
+            print(f"   Trying: {curr_date.strftime('%d-%b-%Y')}")
+
+            response = requests.get(
+                url,
+                headers=HEADERS,
+                timeout=20
+            )
+
+            if response.status_code != 200:
+                continue
+
+            with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                with z.open(z.namelist()[0]) as f:
+                    df = pd.read_csv(f)
+
+            inst_col = next((c for c in ["FinInstrmTp", "INSTRUMENT"] if c in df.columns), None)
+            sym_col = next((c for c in ["TckrSymb", "SYMBOL"] if c in df.columns), None)
+            expiry_col = next((c for c in ["XpryDt", "EXPIRY_DT"] if c in df.columns), None)
+            oi_col = next((c for c in ["OpnIntrst", "OPEN_INT", "OPEN_INTEREST"] if c in df.columns), None)
+            vol_col = next((c for c in ["TtlTradgVol", "CONTRACTS"] if c in df.columns), None)
+            close_col = next((c for c in ["ClsPric", "CLOSE", "SETTLE_PR"] if c in df.columns), None)
+
+            if not all([inst_col, sym_col, expiry_col, oi_col, vol_col, close_col]):
+                continue
+
+            df[inst_col] = df[inst_col].astype(str).str.upper().str.strip()
+
+            df = df[
+                df[inst_col].isin([
+                    "FUTSTK",
+                    "STF",
+                    "STOCK FUTURES",
+                    "FUTSTOCK"
+                ])
+            ].copy()
+
+            if df.empty:
+                continue
+
+            df[expiry_col] = pd.to_datetime(df[expiry_col], errors="coerce")
+            nearest_expiry = df[expiry_col].min()
+
+            df = df[df[expiry_col] == nearest_expiry].copy()
+
+            for col in [oi_col, vol_col, close_col]:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+            fo_df = df[[sym_col, vol_col, oi_col, close_col]].copy()
+
+            fo_df.columns = [
+                "SYMBOL",
+                "FUT_VOLUME",
+                "OPEN_INTEREST",
+                "FUT_CLOSE"
+            ]
+
+            fo_df["SYMBOL"] = fo_df["SYMBOL"].astype(str).str.strip()
+
+            print(
+                f"✅ FO Data Loaded: {len(fo_df)} stocks "
+                f"({curr_date.strftime('%d-%b-%Y')})"
+            )
+
+            return fo_df, curr_date
+
+        except Exception as e:
+            print(f"   ❌ FO Error: {e}")
+
+    return None, None
+
+
+# =========================================================
+# PREVIOUS DAY FUTURES OI DATA
+# =========================================================
+
+def fetch_previous_fo_oi(actual_date):
+
+    print("\n📥 Fetching Previous Day FO OI...")
+
+    for attempt in range(1, 20):
+
+        curr_date = get_previous_trading_day(actual_date, attempt)
+
+        try:
+            date_str = curr_date.strftime("%Y%m%d")
+
+            url = (
+                "https://nsearchives.nseindia.com/content/fo/"
+                f"BhavCopy_NSE_FO_0_0_0_{date_str}_F_0000.csv.zip"
+            )
+
+            response = requests.get(
+                url,
+                headers=HEADERS,
+                timeout=20
+            )
+
+            if response.status_code != 200:
+                continue
+
+            with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                with z.open(z.namelist()[0]) as f:
+                    df = pd.read_csv(f)
+
+            inst_col = next((c for c in ["FinInstrmTp", "INSTRUMENT"] if c in df.columns), None)
+            sym_col = next((c for c in ["TckrSymb", "SYMBOL"] if c in df.columns), None)
+            expiry_col = next((c for c in ["XpryDt", "EXPIRY_DT"] if c in df.columns), None)
+            oi_col = next((c for c in ["OpnIntrst", "OPEN_INT", "OPEN_INTEREST"] if c in df.columns), None)
+
+            if not all([inst_col, sym_col, expiry_col, oi_col]):
+                continue
+
+            df[inst_col] = df[inst_col].astype(str).str.upper().str.strip()
+
+            df = df[
+                df[inst_col].isin([
+                    "FUTSTK",
+                    "STF",
+                    "STOCK FUTURES",
+                    "FUTSTOCK"
+                ])
+            ].copy()
+
+            if df.empty:
+                continue
+
+            df[expiry_col] = pd.to_datetime(df[expiry_col], errors="coerce")
+            nearest_expiry = df[expiry_col].min()
+
+            df = df[df[expiry_col] == nearest_expiry].copy()
+
+            df[oi_col] = pd.to_numeric(df[oi_col], errors="coerce").fillna(0)
+
+            prev_oi_df = df[[sym_col, oi_col]].copy()
+
+            prev_oi_df.columns = [
+                "SYMBOL",
+                "PREV_OPEN_INTEREST"
+            ]
+
+            prev_oi_df["SYMBOL"] = prev_oi_df["SYMBOL"].astype(str).str.strip()
+
+            print(
+                f"✅ Previous FO OI Loaded: "
+                f"{curr_date.strftime('%d-%b-%Y')}"
+            )
+
+            return prev_oi_df
+
+        except Exception as e:
+            print(f"   ❌ Prev FO Error: {e}")
+
+    print("❌ Previous FO OI not found")
+
+    return None
+
+
+# =========================================================
+# DELIVERY DATA
+# =========================================================
+
+def fetch_delivery_data(actual_date):
+
+    print("\n📥 Fetching Delivery Data...")
+
+    try:
+        date_str = actual_date.strftime("%d%m%Y")
+
+        url = (
+            "https://nsearchives.nseindia.com/products/content/sec_bhavdata_full_"
+            f"{date_str}.csv"
+        )
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=20
+        )
+
+        if response.status_code != 200:
+            print("❌ Delivery file not found")
+            return None
+
+        df = pd.read_csv(io.StringIO(response.text))
+
+        df.columns = [c.strip() for c in df.columns]
+
+        df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
+
+        df["DELIV_QTY"] = pd.to_numeric(
+            df["DELIV_QTY"],
+            errors="coerce"
+        ).fillna(0)
+
+        df["TTL_TRD_QNTY"] = pd.to_numeric(
+            df["TTL_TRD_QNTY"],
+            errors="coerce"
+        ).fillna(0)
+
+        df["DELIVERY_%"] = np.where(
+            df["TTL_TRD_QNTY"] > 0,
+            (df["DELIV_QTY"] / df["TTL_TRD_QNTY"]) * 100,
+            0
+        )
+
+        delivery_df = df[[
+            "SYMBOL",
+            "DELIVERY_%"
+        ]].copy()
+
+        delivery_df["DELIVERY_%"] = delivery_df["DELIVERY_%"].round(2)
+
+        print("✅ Delivery Data Loaded")
+
+        return delivery_df
+
+    except Exception as e:
+        print(f"❌ Delivery Error: {e}")
+        return None
+
+
+# =========================================================
+# MAIN EXECUTION
+# =========================================================
+
+hist_prices = fetch_historical_prices(target_date)
+fo_df, actual_date = fetch_fo_data(target_date)
+
+if hist_prices is None or hist_prices.empty:
+    raise Exception("❌ Historical cash data not available.")
+
+if fo_df is None or fo_df.empty:
+    raise Exception("❌ Futures data not available.")
+
+print("\n⚙️ Calculating EMA RSI + Analysis...")
+
+hist_prices["DATE"] = pd.to_datetime(hist_prices["DATE"])
+
+hist_calc_list = []
+
+for symbol, data in hist_prices.groupby("SYMBOL"):
+
+    data = data.sort_values("DATE").copy()
+
+    data["EMA_AVG"] = calc_ema(
+        data["CLOSE"],
+        CONFIG["EMA_LEN"]
+    )
+
+    data["EMA_RSI"] = calc_rsi(
+        data["EMA_AVG"],
+        CONFIG["RSI_LEN"]
+    )
+
+    data["AVG_20_VOLUME"] = data["CASH_VOLUME"].rolling(20).mean()
+
+    data["VOL_SPIKE"] = data["CASH_VOLUME"] / data["AVG_20_VOLUME"]
+
+    data["EMA_100"] = calc_ema(data["CLOSE"], 100)
+
+    data["TREND_STATUS"] = np.where(
+        data["CLOSE"] > data["EMA_100"],
+        "BULLISH",
+        "BEARISH"
+    )
+
+    data["RECENT_20_LOW"] = data["LOW"].rolling(20).min()
+    data["RECENT_20_HIGH"] = data["HIGH"].rolling(20).max()
+
+    data["NEAR_DEMAND_ZONE"] = np.where(
+        data["CLOSE"] <= data["RECENT_20_LOW"] * 1.03,
+        "YES",
+        "NO"
+    )
+
+    data["NEAR_SUPPLY_ZONE"] = np.where(
+        data["CLOSE"] >= data["RECENT_20_HIGH"] * 0.97,
+        "YES",
+        "NO"
+    )
+
+    data["PRICE_CHANGE_%"] = data["CLOSE"].pct_change() * 100
+
+    data["SYMBOL"] = symbol
+
+    hist_calc_list.append(data)
+
+hist_calc = pd.concat(hist_calc_list, ignore_index=True)
+
+latest_date = hist_calc["DATE"].max()
+
+latest_indicators = hist_calc[
+    hist_calc["DATE"] == latest_date
+][[
+    "SYMBOL",
+    "CLOSE",
+    "EMA_RSI",
+    "VOL_SPIKE",
+    "TREND_STATUS",
+    "NEAR_DEMAND_ZONE",
+    "NEAR_SUPPLY_ZONE",
+    "PRICE_CHANGE_%"
+]].copy()
+
+final_df = pd.merge(
+    fo_df,
+    latest_indicators,
+    on="SYMBOL",
+    how="left"
+)
+
+final_df["CLOSE"] = final_df["CLOSE"].fillna(final_df["FUT_CLOSE"])
+
+for col in [
+    "EMA_RSI",
+    "VOL_SPIKE",
+    "PRICE_CHANGE_%"
+]:
+    final_df[col] = pd.to_numeric(
+        final_df[col],
+        errors="coerce"
+    ).fillna(0)
+
+# =========================================================
+# MERGE DELIVERY
+# =========================================================
+
+delivery_df = fetch_delivery_data(actual_date)
+
+if delivery_df is not None:
+    final_df = pd.merge(
+        final_df,
+        delivery_df,
+        on="SYMBOL",
+        how="left"
+    )
+else:
+    final_df["DELIVERY_%"] = 0
+
+final_df["DELIVERY_%"] = pd.to_numeric(
+    final_df["DELIVERY_%"],
+    errors="coerce"
+).fillna(0).round(2)
+
+# =========================================================
+# REAL OI CHANGE %
+# =========================================================
+
+prev_oi_df = fetch_previous_fo_oi(actual_date)
+
+if prev_oi_df is not None:
+    final_df = pd.merge(
+        final_df,
+        prev_oi_df,
+        on="SYMBOL",
+        how="left"
+    )
+else:
+    final_df["PREV_OPEN_INTEREST"] = 0
+
+final_df["PREV_OPEN_INTEREST"] = pd.to_numeric(
+    final_df["PREV_OPEN_INTEREST"],
+    errors="coerce"
+).fillna(0)
+
+final_df["OI_CHANGE_%"] = np.where(
+    final_df["PREV_OPEN_INTEREST"] > 0,
+    (
+        (final_df["OPEN_INTEREST"] - final_df["PREV_OPEN_INTEREST"])
+        / final_df["PREV_OPEN_INTEREST"]
+    ) * 100,
+    0
+)
+
+final_df["OI_CHANGE_%"] = final_df["OI_CHANGE_%"].round(2)
+
+# =========================================================
+# OB / OS STATUS
+# =========================================================
+
+final_df["OB_OS_STATUS"] = np.where(
+    final_df["EMA_RSI"] >= 90,
+    "OVERBOUGHT",
+    np.where(
+        final_df["EMA_RSI"] <= 10,
+        "OVERSOLD",
+        "NORMAL"
+    )
+)
+
+# =========================================================
+# SWING LOGIC
+# =========================================================
+
+final_df["SWING_SIGNAL"] = np.where(
+    (
+        (final_df["OB_OS_STATUS"] == "OVERSOLD") &
+        (final_df["TREND_STATUS"] == "BULLISH") &
+        (final_df["NEAR_DEMAND_ZONE"] == "YES") &
+        (final_df["VOL_SPIKE"] >= 1.2) &
+        (final_df["DELIVERY_%"] >= 35) &
+        (final_df["OI_CHANGE_%"] <= 10)
+    ),
+    "HIGH PROBABILITY BUY",
+    np.where(
+        (
+            (final_df["OB_OS_STATUS"] == "OVERBOUGHT") &
+            (final_df["TREND_STATUS"] == "BEARISH") &
+            (final_df["NEAR_SUPPLY_ZONE"] == "YES") &
+            (final_df["VOL_SPIKE"] >= 1.2) &
+            (final_df["OI_CHANGE_%"] >= 10)
+        ),
+        "HIGH PROBABILITY SELL",
+        "WATCH"
+    )
+)
+
+# =========================================================
+# CONFIDENCE SCORE
+# =========================================================
+
+final_df["CONFIDENCE_SCORE"] = 0
+
+final_df.loc[
+    final_df["OB_OS_STATUS"].isin(["OVERBOUGHT", "OVERSOLD"]),
+    "CONFIDENCE_SCORE"
+] += 25
+
+final_df.loc[
+    final_df["VOL_SPIKE"] >= 1.2,
+    "CONFIDENCE_SCORE"
+] += 15
+
+final_df.loc[
+    final_df["DELIVERY_%"] >= 35,
+    "CONFIDENCE_SCORE"
+] += 15
+
+final_df.loc[
+    final_df["OI_CHANGE_%"] <= 10,
+    "CONFIDENCE_SCORE"
+] += 15
+
+final_df.loc[
+    final_df["NEAR_DEMAND_ZONE"] == "YES",
+    "CONFIDENCE_SCORE"
+] += 10
+
+final_df.loc[
+    final_df["NEAR_SUPPLY_ZONE"] == "YES",
+    "CONFIDENCE_SCORE"
+] += 10
+
+final_df.loc[
+    final_df["SWING_SIGNAL"].isin([
+        "HIGH PROBABILITY BUY",
+        "HIGH PROBABILITY SELL"
+    ]),
+    "CONFIDENCE_SCORE"
+] += 25
+
+# =========================================================
+# ROUNDING
+# =========================================================
+
+final_df["EMA_RSI"] = final_df["EMA_RSI"].round(2)
+final_df["VOL_SPIKE"] = final_df["VOL_SPIKE"].round(2)
+final_df["PRICE_CHANGE_%"] = final_df["PRICE_CHANGE_%"].round(2)
+
+final_df = final_df.fillna(0)
+
+# =========================================================
+# FINAL LIST
+# =========================================================
+
+final_list = final_df[
+    final_df["OB_OS_STATUS"].isin([
+        "OVERBOUGHT",
+        "OVERSOLD"
+    ])
+].copy()
+
+analysis_df = final_list.sort_values(
+    by=[
+        "CONFIDENCE_SCORE",
+        "VOL_SPIKE"
+    ],
+    ascending=False
+).copy()
+
+# =========================================================
+# TRADINGVIEW CLICKABLE LINK
+# =========================================================
+
+for df in [final_df, final_list, analysis_df]:
+
+    df["TV_LINK"] = df["SYMBOL"].apply(
+        lambda x: f'=HYPERLINK("https://www.tradingview.com/chart/?symbol=NSE:{x}","{x}")'
+    )
+
+    df.drop(
+        columns=["SYMBOL"],
+        inplace=True,
+        errors="ignore"
+    )
+
+    df.rename(
+        columns={"TV_LINK": "SYMBOL"},
+        inplace=True
+    )
+
+# =========================================================
+# REMOVE UNWANTED COLUMNS
+# =========================================================
+
+remove_cols = [
+    "FUT_VOLUME",
+    "FUT_CLOSE",
+    "CLOSE"
+]
+
+for df in [final_df, final_list, analysis_df]:
+
+    df.drop(
+        columns=remove_cols,
+        inplace=True,
+        errors="ignore"
+    )
+
+# =========================================================
+# UPDATE GOOGLE SHEETS
+# =========================================================
+
+print("\n📤 Updating Google Sheets...")
+
+worksheet_top.clear()
+worksheet_top.resize(rows=1000, cols=100)
+
+top_data = [
+    final_df.columns.tolist()
+] + final_df.values.tolist()
+
+worksheet_top.update(
+    "A1",
+    top_data,
+    value_input_option="USER_ENTERED"
+)
+
+worksheet_final.clear()
+worksheet_final.resize(rows=1000, cols=100)
+
+final_data = [
+    final_list.columns.tolist()
+] + final_list.values.tolist()
+
+worksheet_final.update(
+    "A1",
+    final_data,
+    value_input_option="USER_ENTERED"
+)
+
+worksheet_analysis.clear()
+worksheet_analysis.resize(rows=1000, cols=100)
+
+analysis_data = [
+    analysis_df.columns.tolist()
+] + analysis_df.values.tolist()
+
+worksheet_analysis.update(
+    "A1",
+    analysis_data,
+    value_input_option="USER_ENTERED"
+)
+
+ist_now = (
+    datetime.utcnow() +
+    timedelta(hours=5, minutes=30)
+).strftime("%d-%b %H:%M")
+
+status = (
+    f"EMA RSI OB/OS + Analysis | "
+    f"Data: {actual_date.strftime('%d-%b-%Y')} | "
+    f"Updated: {ist_now} IST"
+)
+
+worksheet_top.update("X1", [[status]])
+worksheet_final.update("P1", [[status]])
+worksheet_analysis.update("P1", [[status]])
+
+print(f"\n🎉 SUCCESS! {len(final_df)} Future Stocks Updated")
+print(f"✅ FINAL LIST: {len(final_list)} OB/OS Stocks")
+print(f"✅ DATA ANALYSIS: {len(analysis_df)} Ranked Stocks")
+print(f"🕒 Last Updated: {ist_now} IST")
