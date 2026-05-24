@@ -1,0 +1,6 @@
+gspread
+oauth2client
+pandas
+requests
+numpy
+openpyxl
