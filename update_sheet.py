@@ -544,12 +544,6 @@ for symbol, data in hist_prices.groupby("SYMBOL"):
         "BEARISH"
     )
 
-    # =========================================================
-# HTF PIVOT DEMAND / SUPPLY ZONE
-# Same logic as Pine Script:
-# pivothigh / pivotlow + zone_per %
-# =========================================================
-
 HTF_PRD = 10
 ZONE_PER = 0.2
 
