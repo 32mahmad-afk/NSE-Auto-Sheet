@@ -612,7 +612,7 @@ for symbol, data in hist_prices.groupby("SYMBOL"):
     )
 
     # =====================================================
-    # HTF DEMAND / SUPPLY ZONE
+    # HTF DEMAND SUPPLY
     # =====================================================
 
     d_sup_top, d_sup_bot, d_dem_top, d_dem_bot = get_htf_zone(data, "D")
@@ -621,52 +621,59 @@ for symbol, data in hist_prices.groupby("SYMBOL"):
 
     last_close = data["CLOSE"].iloc[-1]
 
-
-
-    ZONE_BUFFER = 3  # 3%
+    ZONE_BUFFER = 3
 
     demand_hit = (
-    (
-        not np.isnan(d_dem_bot)
-        and last_close <= d_dem_top * (1 + ZONE_BUFFER / 100)
-        and last_close >= d_dem_bot * (1 - ZONE_BUFFER / 100)
+        (
+            not np.isnan(d_dem_bot)
+            and last_close <= d_dem_top * (1 + ZONE_BUFFER / 100)
+            and last_close >= d_dem_bot * (1 - ZONE_BUFFER / 100)
+        )
+        or
+        (
+            not np.isnan(w_dem_bot)
+            and last_close <= w_dem_top * (1 + ZONE_BUFFER / 100)
+            and last_close >= w_dem_bot * (1 - ZONE_BUFFER / 100)
+        )
+        or
+        (
+            not np.isnan(m_dem_bot)
+            and last_close <= m_dem_top * (1 + ZONE_BUFFER / 100)
+            and last_close >= m_dem_bot * (1 - ZONE_BUFFER / 100)
+        )
     )
-    or
-    (
-        not np.isnan(w_dem_bot)
-        and last_close <= w_dem_top * (1 + ZONE_BUFFER / 100)
-        and last_close >= w_dem_bot * (1 - ZONE_BUFFER / 100)
-    )
-    or
-    (
-        not np.isnan(m_dem_bot)
-        and last_close <= m_dem_top * (1 + ZONE_BUFFER / 100)
-        and last_close >= m_dem_bot * (1 - ZONE_BUFFER / 100)
-    )
-)
 
-supply_hit = (
-    (
-        not np.isnan(d_sup_bot)
-        and last_close <= d_sup_top * (1 + ZONE_BUFFER / 100)
-        and last_close >= d_sup_bot * (1 - ZONE_BUFFER / 100)
+    supply_hit = (
+        (
+            not np.isnan(d_sup_bot)
+            and last_close <= d_sup_top * (1 + ZONE_BUFFER / 100)
+            and last_close >= d_sup_bot * (1 - ZONE_BUFFER / 100)
+        )
+        or
+        (
+            not np.isnan(w_sup_bot)
+            and last_close <= w_sup_top * (1 + ZONE_BUFFER / 100)
+            and last_close >= w_sup_bot * (1 - ZONE_BUFFER / 100)
+        )
+        or
+        (
+            not np.isnan(m_sup_bot)
+            and last_close <= m_sup_top * (1 + ZONE_BUFFER / 100)
+            and last_close >= m_sup_bot * (1 - ZONE_BUFFER / 100)
+        )
     )
-    or
-    (
-        not np.isnan(w_sup_bot)
-        and last_close <= w_sup_top * (1 + ZONE_BUFFER / 100)
-        and last_close >= w_sup_bot * (1 - ZONE_BUFFER / 100)
-    )
-    or
-    (
-        not np.isnan(m_sup_bot)
-        and last_close <= m_sup_top * (1 + ZONE_BUFFER / 100)
-        and last_close >= m_sup_bot * (1 - ZONE_BUFFER / 100)
-    )
-)
 
-    data["NEAR_DEMAND_ZONE"] = "YES" if demand_hit else "NO"
-    data["NEAR_SUPPLY_ZONE"] = "YES" if supply_hit else "NO"
+    data["NEAR_DEMAND_ZONE"] = (
+        "YES" if demand_hit else "NO"
+    )
+
+    data["NEAR_SUPPLY_ZONE"] = (
+        "YES" if supply_hit else "NO"
+    )
+
+    # =====================================================
+    # PRICE CHANGE
+    # =====================================================
 
     data["PRICE_CHANGE_%"] = (
         data["CLOSE"].pct_change() * 100
