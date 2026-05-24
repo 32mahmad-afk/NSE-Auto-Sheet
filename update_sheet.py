@@ -544,20 +544,85 @@ for symbol, data in hist_prices.groupby("SYMBOL"):
         "BEARISH"
     )
 
-    data["RECENT_20_LOW"] = data["LOW"].rolling(20).min()
-    data["RECENT_20_HIGH"] = data["HIGH"].rolling(20).max()
+    # =========================================================
+# HTF PIVOT DEMAND / SUPPLY ZONE
+# Same logic as Pine Script:
+# pivothigh / pivotlow + zone_per %
+# =========================================================
 
-    data["NEAR_DEMAND_ZONE"] = np.where(
-        data["CLOSE"] <= data["RECENT_20_LOW"] * 1.03,
-        "YES",
-        "NO"
+HTF_PRD = 10
+ZONE_PER = 0.2
+
+def last_pivot_high(series, left=10, right=10):
+    ph = np.nan
+
+    for i in range(left, len(series) - right):
+        window = series.iloc[i-left:i+right+1]
+
+        if series.iloc[i] == window.max():
+            ph = series.iloc[i]
+
+    return ph
+
+
+def last_pivot_low(series, left=10, right=10):
+    pl = np.nan
+
+    for i in range(left, len(series) - right):
+        window = series.iloc[i-left:i+right+1]
+
+        if series.iloc[i] == window.min():
+            pl = series.iloc[i]
+
+    return pl
+
+
+def get_htf_zone(df, rule):
+    htf = (
+        df.set_index("DATE")
+        .resample(rule)
+        .agg({
+            "HIGH": "max",
+            "LOW": "min",
+            "CLOSE": "last"
+        })
+        .dropna()
+        .reset_index()
     )
 
-    data["NEAR_SUPPLY_ZONE"] = np.where(
-        data["CLOSE"] >= data["RECENT_20_HIGH"] * 0.97,
-        "YES",
-        "NO"
-    )
+    ph = last_pivot_high(htf["HIGH"], HTF_PRD, HTF_PRD)
+    pl = last_pivot_low(htf["LOW"], HTF_PRD, HTF_PRD)
+
+    supply_top = ph
+    supply_bot = ph - (ph * ZONE_PER / 100) if not np.isnan(ph) else np.nan
+
+    demand_bot = pl
+    demand_top = pl + (pl * ZONE_PER / 100) if not np.isnan(pl) else np.nan
+
+    return supply_top, supply_bot, demand_top, demand_bot
+
+
+# Daily / Weekly / Monthly zones
+d_sup_top, d_sup_bot, d_dem_top, d_dem_bot = get_htf_zone(data, "D")
+w_sup_top, w_sup_bot, w_dem_top, w_dem_bot = get_htf_zone(data, "W")
+m_sup_top, m_sup_bot, m_dem_top, m_dem_bot = get_htf_zone(data, "M")
+
+last_close = data["CLOSE"].iloc[-1]
+
+demand_hit = (
+    (not np.isnan(d_dem_bot) and d_dem_bot <= last_close <= d_dem_top) or
+    (not np.isnan(w_dem_bot) and w_dem_bot <= last_close <= w_dem_top) or
+    (not np.isnan(m_dem_bot) and m_dem_bot <= last_close <= m_dem_top)
+)
+
+supply_hit = (
+    (not np.isnan(d_sup_bot) and d_sup_bot <= last_close <= d_sup_top) or
+    (not np.isnan(w_sup_bot) and w_sup_bot <= last_close <= w_sup_top) or
+    (not np.isnan(m_sup_bot) and m_sup_bot <= last_close <= m_sup_top)
+)
+
+data["NEAR_DEMAND_ZONE"] = "YES" if demand_hit else "NO"
+data["NEAR_SUPPLY_ZONE"] = "YES" if supply_hit else "NO"
 
     data["PRICE_CHANGE_%"] = data["CLOSE"].pct_change() * 100
 
