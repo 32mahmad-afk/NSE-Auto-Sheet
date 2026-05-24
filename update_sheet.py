@@ -112,8 +112,7 @@ try:
 
 except Exception as e:
     print("❌ Google Sheet Error:", repr(e))
-raise
-    sys.exit(1)
+    raise
 
 
 # =========================================================
