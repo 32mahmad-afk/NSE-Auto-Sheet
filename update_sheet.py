@@ -111,7 +111,8 @@ try:
     print("✅ GOOGLE SHEET CONNECTED")
 
 except Exception as e:
-    print(f"❌ Google Sheet Error: {e}")
+    print("❌ Google Sheet Error:", repr(e))
+raise
     sys.exit(1)
 
 
