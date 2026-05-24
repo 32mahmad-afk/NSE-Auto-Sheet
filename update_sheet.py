@@ -94,20 +94,6 @@ try:
             cols=100
         )
 
-    worksheet_analysis = None
-
-    for ws in spreadsheet.worksheets():
-        if ws.title.strip().upper() == "DATA ANALYSIS":
-            worksheet_analysis = ws
-            break
-
-    if worksheet_analysis is None:
-        worksheet_analysis = spreadsheet.add_worksheet(
-            title="DATA ANALYSIS",
-            rows=1000,
-            cols=100
-        )
-
     print("✅ GOOGLE SHEET CONNECTED")
 
 except Exception as e:
@@ -584,7 +570,8 @@ if fo_df is None or fo_df.empty:
 
 print("\n⚙️ Calculating EMA RSI + Analysis...")
 
-hist_prices["DATE"] = pd.to_datetime(hist_prices["DATE"])
+hist_prices["DATE"] = pd.to_datetime(hist_prices["DATE"], errors="coerce")
+hist_prices = hist_prices.dropna(subset=["DATE"])
 
 hist_calc_list = []
 
@@ -625,33 +612,29 @@ for symbol, data in hist_prices.groupby("SYMBOL"):
     )
 
     # =====================================================
-    # HTF DEMAND SUPPLY
+    # HTF DEMAND / SUPPLY ZONE
     # =====================================================
 
     d_sup_top, d_sup_bot, d_dem_top, d_dem_bot = get_htf_zone(data, "D")
-w_sup_top, w_sup_bot, w_dem_top, w_dem_bot = get_htf_zone(data, "W")
-m_sup_top, m_sup_bot, m_dem_top, m_dem_bot = get_htf_zone(data, "ME")
+    w_sup_top, w_sup_bot, w_dem_top, w_dem_bot = get_htf_zone(data, "W")
+    m_sup_top, m_sup_bot, m_dem_top, m_dem_bot = get_htf_zone(data, "ME")
 
-last_close = data["CLOSE"].iloc[-1]
+    last_close = data["CLOSE"].iloc[-1]
 
-demand_hit = (
-    (not np.isnan(d_dem_bot) and d_dem_bot <= last_close <= d_dem_top) or
-    (not np.isnan(w_dem_bot) and w_dem_bot <= last_close <= w_dem_top) or
-    (not np.isnan(m_dem_bot) and m_dem_bot <= last_close <= m_dem_top)
-)
+    demand_hit = (
+        (not np.isnan(d_dem_bot) and d_dem_bot <= last_close <= d_dem_top) or
+        (not np.isnan(w_dem_bot) and w_dem_bot <= last_close <= w_dem_top) or
+        (not np.isnan(m_dem_bot) and m_dem_bot <= last_close <= m_dem_top)
+    )
 
-supply_hit = (
-    (not np.isnan(d_sup_bot) and d_sup_bot <= last_close <= d_sup_top) or
-    (not np.isnan(w_sup_bot) and w_sup_bot <= last_close <= w_sup_top) or
-    (not np.isnan(m_sup_bot) and m_sup_bot <= last_close <= m_sup_top)
-)
+    supply_hit = (
+        (not np.isnan(d_sup_bot) and d_sup_bot <= last_close <= d_sup_top) or
+        (not np.isnan(w_sup_bot) and w_sup_bot <= last_close <= w_sup_top) or
+        (not np.isnan(m_sup_bot) and m_sup_bot <= last_close <= m_sup_top)
+    )
 
-data["NEAR_DEMAND_ZONE"] = "YES" if demand_hit else "NO"
-data["NEAR_SUPPLY_ZONE"] = "YES" if supply_hit else "NO"
-
-    # =====================================================
-    # PRICE CHANGE
-    # =====================================================
+    data["NEAR_DEMAND_ZONE"] = "YES" if demand_hit else "NO"
+    data["NEAR_SUPPLY_ZONE"] = "YES" if supply_hit else "NO"
 
     data["PRICE_CHANGE_%"] = (
         data["CLOSE"].pct_change() * 100
@@ -856,19 +839,11 @@ final_list = final_df[
     ])
 ].copy()
 
-analysis_df = final_list.sort_values(
-    by=[
-        "CONFIDENCE_SCORE",
-        "VOL_SPIKE"
-    ],
-    ascending=False
-).copy()
-
 # =========================================================
 # TRADINGVIEW CLICKABLE LINK
 # =========================================================
 
-for df in [final_df, final_list, analysis_df]:
+for df in [final_df, final_list]:
 
     df["TV_LINK"] = df["SYMBOL"].apply(
         lambda x: f'=HYPERLINK("https://www.tradingview.com/chart/?symbol=NSE:{x}","{x}")'
@@ -886,16 +861,23 @@ for df in [final_df, final_list, analysis_df]:
     )
 
 # =========================================================
-# REMOVE UNWANTED COLUMNS
+# REMOVE UNWANTED COLUMNS FROM TOP 250 AND FINAL LIST
 # =========================================================
 
 remove_cols = [
     "FUT_VOLUME",
     "FUT_CLOSE",
-    "CLOSE"
+    "CLOSE",
+    "OPEN_INTEREST",
+    "VOL_SPIKE",
+    "TREND_STATUS",
+    "PRICE_CHANGE_%",
+    "PREV_OPEN_INTEREST",
+    "SWING_SIGNAL",
+    "CONFIDENCE_SCORE"
 ]
 
-for df in [final_df, final_list, analysis_df]:
+for df in [final_df, final_list]:
 
     df.drop(
         columns=remove_cols,
@@ -905,6 +887,7 @@ for df in [final_df, final_list, analysis_df]:
 
 # =========================================================
 # UPDATE GOOGLE SHEETS
+# DATA ANALYSIS SHEET REMOVED
 # =========================================================
 
 print("\n📤 Updating Google Sheets...")
@@ -935,35 +918,21 @@ worksheet_final.update(
     value_input_option="USER_ENTERED"
 )
 
-worksheet_analysis.clear()
-worksheet_analysis.resize(rows=1000, cols=100)
-
-analysis_data = [
-    analysis_df.columns.tolist()
-] + analysis_df.values.tolist()
-
-worksheet_analysis.update(
-    "A1",
-    analysis_data,
-    value_input_option="USER_ENTERED"
-)
-
 ist_now = (
     datetime.utcnow() +
     timedelta(hours=5, minutes=30)
 ).strftime("%d-%b %H:%M")
 
 status = (
-    f"EMA RSI OB/OS + Analysis | "
+    f"EMA RSI OB/OS | "
     f"Data: {actual_date.strftime('%d-%b-%Y')} | "
     f"Updated: {ist_now} IST"
 )
 
 worksheet_top.update("X1", [[status]])
 worksheet_final.update("P1", [[status]])
-worksheet_analysis.update("P1", [[status]])
 
 print(f"\n🎉 SUCCESS! {len(final_df)} Future Stocks Updated")
 print(f"✅ FINAL LIST: {len(final_list)} OB/OS Stocks")
-print(f"✅ DATA ANALYSIS: {len(analysis_df)} Ranked Stocks")
+print("✅ DATA ANALYSIS Sheet Update Removed")
 print(f"🕒 Last Updated: {ist_now} IST")
