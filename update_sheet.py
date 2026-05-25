@@ -294,9 +294,13 @@ def fetch_fo_data(target_date):
             df = df[
                 df[inst_col].isin([
                     "FUTSTK",
+                    "FUTIDX",
                     "STF",
+                    "IDF",
                     "STOCK FUTURES",
-                    "FUTSTOCK"
+                    "INDEX FUTURES",
+                    "FUTSTOCK",
+                    "FUTINDEX"
                 ])
             ].copy()
 
@@ -381,9 +385,13 @@ def fetch_previous_fo_oi(actual_date):
             df = df[
                 df[inst_col].isin([
                     "FUTSTK",
+                    "FUTIDX",
                     "STF",
+                    "IDF",
                     "STOCK FUTURES",
-                    "FUTSTOCK"
+                    "INDEX FUTURES",
+                    "FUTSTOCK",
+                    "FUTINDEX"
                 ])
             ].copy()
 
