@@ -15,7 +15,7 @@ CONFIG = {
     "SPREADSHEET_KEY": "1zzEuAn8rXujdqCYTdHrZW67Bg-7vLh_Ho58hzg969_E",
     "EMA_LEN": 21,
     "RSI_LEN": 10,
-    "HISTORICAL_DAYS": 200,
+    "HISTORICAL_DAYS": 300,
 }
 
 print("🚀 Swing Institutional Scanner Started...")
