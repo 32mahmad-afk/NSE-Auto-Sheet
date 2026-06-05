@@ -24,24 +24,24 @@ print("🚀 Swing Institutional Scanner Started...")
 # AUTO DATE
 # =========================================================
 
-#def get_latest_trading_date():
-   # today = datetime.now()
+def get_latest_trading_date():
+    today = datetime.now()
 
-    #for i in range(10):
-       # test_date = today - timedelta(days=i)
+    for i in range(10):
+        test_date = today - timedelta(days=i)
 
-        #if test_date.weekday() < 5:
+        if test_date.weekday() < 5:
             #return test_date
 
-    #return today
+    return today
 
 
-#target_date = get_latest_trading_date()
-#fetched_date_str = target_date.strftime("%d-%b-%Y")
+target_date = get_latest_trading_date()
+fetched_date_str = target_date.strftime("%d-%b-%Y")
 
 #print(f"📅 Using Date: {fetched_date_str}")
-target_date = datetime(2026, 6, 2)
-fetched_date_str = target_date.strftime("%d-%b-%Y")
+#target_date = datetime(2026, 6, 2)
+#fetched_date_str = target_date.strftime("%d-%b-%Y")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
