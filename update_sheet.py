@@ -31,7 +31,7 @@ def get_latest_trading_date():
         test_date = today - timedelta(days=i)
 
         if test_date.weekday() < 5:
-            #return test_date
+            return test_date
 
     return today
 
