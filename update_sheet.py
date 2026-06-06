@@ -933,6 +933,32 @@ for df in [final_df, final_list]:
     )
 
 # =========================================================
+# ADD DATE COLUMN IN COLUMN I
+# =========================================================
+
+date_value = actual_date.strftime("%d-%b-%Y")
+
+# Agar DATE column pehle se hai to delete karo
+if "DATE" in final_df.columns:
+    final_df.drop(columns=["DATE"], inplace=True)
+
+if "DATE" in final_list.columns:
+    final_list.drop(columns=["DATE"], inplace=True)
+
+# Column I = index 8
+final_df.insert(
+    8,
+    "DATE",
+    date_value
+)
+
+final_list.insert(
+    8,
+    "DATE",
+    date_value
+)
+
+# =========================================================
 # UPDATE GOOGLE SHEETS
 # DATA ANALYSIS SHEET REMOVED
 # =========================================================
