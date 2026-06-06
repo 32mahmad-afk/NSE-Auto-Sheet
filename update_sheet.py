@@ -932,31 +932,37 @@ for df in [final_df, final_list]:
         errors="ignore"
     )
 
+
 # =========================================================
-# ADD DATE COLUMN IN COLUMN I
+# ADD DATE COLUMN IN COLUMN I SAFELY
 # =========================================================
 
 date_value = actual_date.strftime("%d-%b-%Y")
 
-# Agar DATE column pehle se hai to delete karo
-if "DATE" in final_df.columns:
-    final_df.drop(columns=["DATE"], inplace=True)
 
-if "DATE" in final_list.columns:
-    final_list.drop(columns=["DATE"], inplace=True)
+def add_date_column_i(df):
+    if "DATE" in df.columns:
+        df.drop(columns=["DATE"], inplace=True)
 
-# Column I = index 8
-final_df.insert(
-    8,
-    "DATE",
-    date_value
-)
+    while len(df.columns) < 8:
+        blank_col = f"BLANK_{len(df.columns) + 1}"
 
-final_list.insert(
-    8,
-    "DATE",
-    date_value
-)
+        while blank_col in df.columns:
+            blank_col = blank_col + "_"
+
+        df[blank_col] = ""
+
+    df.insert(
+        8,
+        "DATE",
+        date_value
+    )
+
+    return df
+
+
+final_df = add_date_column_i(final_df)
+final_list = add_date_column_i(final_list)
 
 # =========================================================
 # UPDATE GOOGLE SHEETS
