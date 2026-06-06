@@ -39,7 +39,7 @@ print("🚀 Swing Institutional Scanner Started...")
 #target_date = get_latest_trading_date()
 #fetched_date_str = target_date.strftime("%d-%b-%Y")
 
-#print(f"📅 Using Date: {fetched_date_str}")
+print(f"📅 Using Date: {fetched_date_str}")
 target_date = datetime(2026, 6, 5)
 fetched_date_str = target_date.strftime("%d-%b-%Y")
 
