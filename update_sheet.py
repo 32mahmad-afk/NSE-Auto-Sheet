@@ -786,10 +786,10 @@ final_df["OI_CHANGE_%"] = final_df["OI_CHANGE_%"].round(2)
 
 final_df["OB_OS_STATUS"] = np.where(
     final_df["EMA_RSI"] >= 90,
-    "OVERBOUGHT",
+    "BUY",
     np.where(
         final_df["EMA_RSI"] <= 10,
-        "OVERSOLD",
+        "SELL",
         "NORMAL"
     )
 )
@@ -881,8 +881,8 @@ final_df = final_df.fillna(0)
 
 final_list = final_df[
     final_df["OB_OS_STATUS"].isin([
-        "OVERBOUGHT",
-        "OVERSOLD"
+        "BUY",
+        "SELL"
     ])
 ].copy()
 
