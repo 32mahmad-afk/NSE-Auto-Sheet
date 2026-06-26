@@ -800,7 +800,7 @@ final_df["OB_OS_STATUS"] = np.where(
 
 final_df["SWING_SIGNAL"] = np.where(
     (
-        (final_df["OB_OS_STATUS"] == "OVERSOLD") &
+        (final_df["OB_OS_STATUS"] == "SELL") &
         (final_df["TREND_STATUS"] == "BULLISH") &
         (final_df["NEAR_DEMAND_ZONE"] == "YES") &
         (final_df["VOL_SPIKE"] >= 1.2) &
@@ -810,7 +810,7 @@ final_df["SWING_SIGNAL"] = np.where(
     "HIGH PROBABILITY BUY",
     np.where(
         (
-            (final_df["OB_OS_STATUS"] == "OVERBOUGHT") &
+            (final_df["OB_OS_STATUS"] == "BUY") &
             (final_df["TREND_STATUS"] == "BEARISH") &
             (final_df["NEAR_SUPPLY_ZONE"] == "YES") &
             (final_df["VOL_SPIKE"] >= 1.2) &
@@ -828,7 +828,7 @@ final_df["SWING_SIGNAL"] = np.where(
 final_df["CONFIDENCE_SCORE"] = 0
 
 final_df.loc[
-    final_df["OB_OS_STATUS"].isin(["OVERBOUGHT", "OVERSOLD"]),
+    final_df["OB_OS_STATUS"].isin(["BUY", "SELL"]),
     "CONFIDENCE_SCORE"
 ] += 25
 
@@ -885,6 +885,17 @@ final_list = final_df[
         "SELL"
     ])
 ].copy()
+
+final_list = final_list.sort_values(
+    by="EMA_RSI",
+    ascending=True
+).reset_index(drop=True)
+
+final_list.insert(
+    0,
+    "SR_NO",
+    range(1, len(final_list) + 1)
+)
 
 # =========================================================
 # TRADINGVIEW CLICKABLE LINK
