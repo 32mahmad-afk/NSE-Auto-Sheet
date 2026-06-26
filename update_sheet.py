@@ -875,21 +875,32 @@ final_df["PRICE_CHANGE_%"] = final_df["PRICE_CHANGE_%"].round(2)
 
 final_df = final_df.fillna(0)
 
-# =========================================================
+# ===============================
 # FINAL LIST
-# =========================================================
+# ===============================
 
-final_list = final_df[
-    final_df["OB_OS_STATUS"].isin([
-        "BUY",
-        "SELL"
-    ])
+buy_list = final_df[
+    final_df["EMA_RSI"] >= 90
 ].copy()
 
-final_list = final_list.sort_values(
+buy_list = buy_list.sort_values(
     by="EMA_RSI",
     ascending=True
-).reset_index(drop=True)
+)
+
+sell_list = final_df[
+    final_df["EMA_RSI"] <= 10
+].copy()
+
+sell_list = sell_list.sort_values(
+    by="EMA_RSI",
+    ascending=False
+)
+
+final_list = pd.concat(
+    [buy_list, sell_list],
+    ignore_index=True
+)
 
 final_list.insert(
     0,
