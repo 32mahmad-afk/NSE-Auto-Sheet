@@ -40,7 +40,7 @@ print("🚀 Swing Institutional Scanner Started...")
 #fetched_date_str = target_date.strftime("%d-%b-%Y")
 
 #print(f"📅 Using Date: {fetched_date_str}")
-target_date = datetime(2026, 7, 3)
+target_date = datetime(2026, 2, 19)
 fetched_date_str = target_date.strftime("%d-%b-%Y")
 
 HEADERS = {
