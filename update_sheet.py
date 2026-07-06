@@ -15,7 +15,7 @@ CONFIG = {
     "SPREADSHEET_KEY": "1zzEuAn8rXujdqCYTdHrZW67Bg-7vLh_Ho58hzg969_E",
     "EMA_LEN": 21,
     "RSI_LEN": 10,
-    "HISTORICAL_DAYS": 300,
+    "HISTORICAL_DAYS": 700,
 }
 
 print("🚀 Swing Institutional Scanner Started...")
@@ -40,7 +40,7 @@ print("🚀 Swing Institutional Scanner Started...")
 #fetched_date_str = target_date.strftime("%d-%b-%Y")
 
 #print(f"📅 Using Date: {fetched_date_str}")
-target_date = datetime(2026, 2, 20)
+target_date = datetime(2026, 7, 6)
 fetched_date_str = target_date.strftime("%d-%b-%Y")
 
 HEADERS = {
@@ -163,7 +163,7 @@ def fetch_historical_prices(target_date, days=CONFIG["HISTORICAL_DAYS"]):
     count = 0
     i = 0
 
-    while count < days and i < 350:
+    while count < days and i < 900:
 
         curr_date = get_previous_trading_day(target_date, i)
 
@@ -620,6 +620,39 @@ for symbol, data in hist_prices.groupby("SYMBOL"):
     )
 
     # =====================================================
+    # DAILY / WEEKLY / MONTHLY RSI
+    # =====================================================
+
+    data["DAILY_RSI"] = calc_rsi(data["CLOSE"], 14)
+
+    temp = data[["DATE", "CLOSE"]].copy()
+    temp = temp.set_index("DATE")
+
+    weekly_close = temp["CLOSE"].resample("W").last().dropna()
+    monthly_close = temp["CLOSE"].resample("ME").last().dropna()
+
+    weekly_rsi = calc_rsi(weekly_close, 14)
+    monthly_rsi = calc_rsi(monthly_close, 14)
+
+    data["WEEKLY_RSI"] = weekly_rsi.reindex(
+        data["DATE"], method="ffill"
+    ).values
+
+    data["MONTHLY_RSI"] = monthly_rsi.reindex(
+        data["DATE"], method="ffill"
+    ).values
+
+    data["DAILY_RSI_CROSS_ABOVE_60"] = (
+         (data["DAILY_RSI"] > 60) &
+         (data["DAILY_RSI"].shift(1) <= 60)
+    )
+
+    data["DAILY_RSI_CROSS_BELOW_40"] = (
+         (data["DAILY_RSI"] < 40) &
+         (data["DAILY_RSI"].shift(1) >= 40)
+    )   
+
+    # =====================================================
     # HTF DEMAND SUPPLY
     # =====================================================
 
@@ -701,13 +734,17 @@ latest_indicators = hist_calc[
     "SYMBOL",
     "CLOSE",
     "EMA_RSI",
+    "DAILY_RSI",
+    "WEEKLY_RSI",
+    "MONTHLY_RSI",
+    "DAILY_RSI_CROSS_ABOVE_60",
+    "DAILY_RSI_CROSS_BELOW_40",
     "VOL_SPIKE",
     "TREND_STATUS",
     "NEAR_DEMAND_ZONE",
     "NEAR_SUPPLY_ZONE",
     "PRICE_CHANGE_%"
 ]].copy()
-
 final_df = pd.merge(
     fo_df,
     latest_indicators,
@@ -719,6 +756,9 @@ final_df["CLOSE"] = final_df["CLOSE"].fillna(final_df["FUT_CLOSE"])
 
 for col in [
     "EMA_RSI",
+    "DAILY_RSI",
+    "WEEKLY_RSI",
+    "MONTHLY_RSI",
     "VOL_SPIKE",
     "PRICE_CHANGE_%"
 ]:
@@ -873,6 +913,10 @@ final_df["EMA_RSI"] = final_df["EMA_RSI"].round(2)
 final_df["VOL_SPIKE"] = final_df["VOL_SPIKE"].round(2)
 final_df["PRICE_CHANGE_%"] = final_df["PRICE_CHANGE_%"].round(2)
 
+final_df["DAILY_RSI"] = final_df["DAILY_RSI"].round(2)
+final_df["WEEKLY_RSI"] = final_df["WEEKLY_RSI"].round(2)
+final_df["MONTHLY_RSI"] = final_df["MONTHLY_RSI"].round(2)
+
 final_df = final_df.fillna(0)
 
 # ===============================
@@ -880,26 +924,62 @@ final_df = final_df.fillna(0)
 # ===============================
 
 buy_list = final_df[
-    final_df["EMA_RSI"] >= 90
+    (final_df["EMA_RSI"] >= 90) &
+    (final_df["MONTHLY_RSI"] > 60) &
+    (final_df["WEEKLY_RSI"] > 60) &
+    (final_df["DAILY_RSI"] > 60)
 ].copy()
 
-buy_list = buy_list.sort_values(
-    by="EMA_RSI",
+sell_list = final_df[
+    (final_df["EMA_RSI"] <= 10) &
+    (final_df["MONTHLY_RSI"] < 60) &
+    (final_df["WEEKLY_RSI"] < 60) &
+    (final_df["DAILY_RSI"] < 40)
+].copy()
+
+current_list = pd.concat(
+    [buy_list, sell_list],
+    ignore_index=True
+)
+
+try:
+    old_symbols = worksheet_final.col_values(2)[1:]
+    old_symbols = [
+        str(x).strip().upper()
+        for x in old_symbols
+        if str(x).strip() != ""
+    ]
+except:
+    old_symbols = []
+
+current_list["SYMBOL_KEY"] = current_list["SYMBOL"].astype(str).str.strip().str.upper()
+
+new_list = current_list[
+    ~current_list["SYMBOL_KEY"].isin(old_symbols)
+].copy()
+
+old_valid_list = current_list[
+    current_list["SYMBOL_KEY"].isin(old_symbols)
+].copy()
+
+old_order = {sym: i for i, sym in enumerate(old_symbols)}
+
+old_valid_list["OLD_ORDER"] = old_valid_list["SYMBOL_KEY"].map(old_order)
+
+old_valid_list = old_valid_list.sort_values(
+    by="OLD_ORDER",
     ascending=True
 )
 
-sell_list = final_df[
-    final_df["EMA_RSI"] <= 10
-].copy()
-
-sell_list = sell_list.sort_values(
-    by="EMA_RSI",
-    ascending=False
+final_list = pd.concat(
+    [new_list, old_valid_list],
+    ignore_index=True
 )
 
-final_list = pd.concat(
-    [buy_list, sell_list],
-    ignore_index=True
+final_list.drop(
+    columns=["SYMBOL_KEY", "OLD_ORDER"],
+    inplace=True,
+    errors="ignore"
 )
 
 final_list.insert(
@@ -943,7 +1023,12 @@ remove_cols = [
     "PRICE_CHANGE_%",
     "PREV_OPEN_INTEREST",
     "SWING_SIGNAL",
-    "CONFIDENCE_SCORE"
+    "CONFIDENCE_SCORE",
+    "DAILY_RSI",
+    "WEEKLY_RSI",
+    "MONTHLY_RSI",
+    "DAILY_RSI_CROSS_ABOVE_60",
+    "DAILY_RSI_CROSS_BELOW_40"
 ]
 
 for df in [final_df, final_list]:
