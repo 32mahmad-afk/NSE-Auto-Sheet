@@ -580,6 +580,18 @@ def get_htf_zone(df, rule):
 hist_prices = fetch_historical_prices(target_date)
 fo_df, actual_date = fetch_fo_data(target_date)
 
+index_symbols = [
+    "NIFTY",
+    "BANKNIFTY",
+    "FINNIFTY",
+    "MIDCPNIFTY",
+    "NIFTYNXT50"
+]
+
+fo_df = fo_df[
+    ~fo_df["SYMBOL"].isin(index_symbols)
+].copy()
+
 if hist_prices is None or hist_prices.empty:
     raise Exception("❌ Historical cash data not available.")
 
@@ -746,6 +758,19 @@ for symbol, data in hist_prices.groupby("SYMBOL"):
     )
     data.loc[data["DAILY_RSI"] <= 60, "RSI60_AGE"] = 0
 
+    data["EMA10_AGE"] = (
+    data["EMA_RSI"].le(10)
+    .groupby((data["EMA_RSI"].gt(10)).cumsum())
+    .cumcount() + 1
+    )
+    data.loc[data["EMA_RSI"] > 10, "EMA10_AGE"] = 0
+
+    data["RSI40_AGE"] = (
+        data["DAILY_RSI"].lt(40)
+        .groupby((data["DAILY_RSI"].ge(40)).cumsum())
+        .cumcount() + 1
+    )
+    data.loc[data["DAILY_RSI"] >= 40, "RSI40_AGE"] = 0
     hist_calc_list.append(data)
 
 hist_calc = pd.concat(hist_calc_list, ignore_index=True)
@@ -762,7 +787,9 @@ latest_indicators = hist_calc[
     "WEEKLY_RSI",
     "MONTHLY_RSI",
     "EMA90_AGE",
+    "EMA10_AGE",
     "RSI60_AGE",
+    "RSI40_AGE",
     "DAILY_RSI_CROSS_ABOVE_60",
     "DAILY_RSI_CROSS_BELOW_40",
     "VOL_SPIKE",
@@ -1102,7 +1129,9 @@ final_list = final_list[
         "DAYS_IN_LIST",
         "EMA_RSI",
         "EMA90_AGE",
+        "EMA10_AGE",
         "RSI60_AGE",
+        "RSI40_AGE",
         "OI_CHANGE_%",
         "DELIVERY_%",
         "NEAR_DEMAND_ZONE",
