@@ -955,7 +955,7 @@ if not use_indicator_cache:
 
     indicator_cache_save = latest_indicators.copy()
     indicator_cache_save["DATE"] = latest_date
-    indicator_cache_save.to_pickle(INDICATOR_CACHE_FILE, index=False)
+    indicator_cache_save.to_pickle(INDICATOR_CACHE_FILE)
 
     print("✅ Latest indicators cached")
 
