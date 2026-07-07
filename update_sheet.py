@@ -722,6 +722,20 @@ for symbol, data in hist_prices.groupby("SYMBOL"):
 
     data["SYMBOL"] = symbol
 
+    data["EMA90_AGE"] = (
+        data["EMA_RSI"].ge(90)
+        .groupby((data["EMA_RSI"].lt(90)).cumsum())
+        .cumcount() + 1
+    )
+    data.loc[data["EMA_RSI"] < 90, "EMA90_AGE"] = 0
+
+    data["RSI60_AGE"] = (
+        data["DAILY_RSI"].gt(60)
+        .groupby((data["DAILY_RSI"].le(60)).cumsum())
+        .cumcount() + 1
+    )
+    data.loc[data["DAILY_RSI"] <= 60, "RSI60_AGE"] = 0
+
     hist_calc_list.append(data)
 
 hist_calc = pd.concat(hist_calc_list, ignore_index=True)
@@ -737,6 +751,8 @@ latest_indicators = hist_calc[
     "DAILY_RSI",
     "WEEKLY_RSI",
     "MONTHLY_RSI",
+    "EMA90_AGE",
+    "RSI60_AGE",
     "DAILY_RSI_CROSS_ABOVE_60",
     "DAILY_RSI_CROSS_BELOW_40",
     "VOL_SPIKE",
@@ -943,7 +959,11 @@ current_list = pd.concat(
 )
 
 try:
-    old_symbols = worksheet_final.col_values(2)[1:]
+    headers = worksheet_final.row_values(1)
+
+    symbol_col = headers.index("SYMBOL") + 1
+
+    old_symbols = worksheet_final.col_values(symbol_col)[1:]
     old_symbols = [
         str(x).strip().upper()
         for x in old_symbols
@@ -982,11 +1002,30 @@ final_list.drop(
     errors="ignore"
 )
 
-final_list.insert(
-    0,
-    "SR_NO",
-    range(1, len(final_list) + 1)
+try:
+    headers = worksheet_final.row_values(1)
+
+    symbol_col = headers.index("SYMBOL") + 1
+    days_col = headers.index("DAYS_IN_LIST") + 1
+
+    old_days_map = dict(
+        zip(
+            worksheet_final.col_values(symbol_col)[1:],
+            worksheet_final.col_values(days_col)[1:]
+        )
+    )
+
+except:
+    old_days_map = {}
+
+final_list["DAYS_IN_LIST"] = final_list["SYMBOL"].astype(str).map(
+    lambda x: int(old_days_map.get(x, 0)) + 1
 )
+
+final_list.loc[
+    final_list["SYMBOL"].isin(new_list["SYMBOL"]),
+    "DAYS_IN_LIST"
+] = 1
 
 # =========================================================
 # TRADINGVIEW CLICKABLE LINK
@@ -1039,6 +1078,23 @@ for df in [final_df, final_list]:
         errors="ignore"
     )
 
+# =========================================================
+# FINAL LIST COLUMN ORDER
+# =========================================================
+
+final_list = final_list[
+    [
+        "DAYS_IN_LIST",
+        "EMA90_AGE",
+        "RSI60_AGE",
+        "OI_CHANGE_%",
+        "DELIVERY_%",
+        "NEAR_DEMAND_ZONE",
+        "NEAR_SUPPLY_ZONE",
+        "SYMBOL"
+    ]
+]
+
 
 # =========================================================
 # ADD DATE COLUMN IN COLUMN I SAFELY
@@ -1047,29 +1103,25 @@ for df in [final_df, final_list]:
 date_value = actual_date.strftime("%d-%b-%Y")
 
 
-def add_date_column_i(df):
+def add_scan_date_before_symbol(df):
     if "DATE" in df.columns:
         df.drop(columns=["DATE"], inplace=True)
 
-    while len(df.columns) < 8:
-        blank_col = f"BLANK_{len(df.columns) + 1}"
+    if "SCAN_DATE" in df.columns:
+        df.drop(columns=["SCAN_DATE"], inplace=True)
 
-        while blank_col in df.columns:
-            blank_col = blank_col + "_"
-
-        df[blank_col] = ""
-
-    df.insert(
-        8,
-        "DATE",
-        date_value
-    )
+    if "SYMBOL" in df.columns:
+        symbol_col = df.pop("SYMBOL")
+        df["SCAN_DATE"] = date_value
+        df["SYMBOL"] = symbol_col
+    else:
+        df["SCAN_DATE"] = date_value
 
     return df
 
 
-final_df = add_date_column_i(final_df)
-final_list = add_date_column_i(final_list)
+final_df = add_scan_date_before_symbol(final_df)
+final_list = add_scan_date_before_symbol(final_list)
 
 # =========================================================
 # UPDATE GOOGLE SHEETS
