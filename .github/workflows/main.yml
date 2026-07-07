@@ -18,6 +18,14 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Restore Scanner Cache
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: scanner-cache-v1
+          restore-keys: |
+            scanner-cache-
+
       - name: Install Requirements
         run: |
           python -m pip install --upgrade pip
