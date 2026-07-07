@@ -167,11 +167,11 @@ def clean_symbol_value(x):
 
 CACHE_DIR = "cache"
 
-CACHE_FILE = os.path.join(CACHE_DIR, "cash_700_days.parquet")
+CACHE_FILE = os.path.join(CACHE_DIR, "cash_700_days.pkl")
 
 INDICATOR_CACHE_FILE = os.path.join(
     CACHE_DIR,
-    "latest_indicators.parquet"
+    "latest_indicators.pkl"
 )
 
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -231,12 +231,12 @@ def load_or_update_cash_cache(target_date):
             return hist
 
         hist["DATE"] = pd.to_datetime(hist["DATE"], errors="coerce")
-        hist.to_parquet(CACHE_FILE, index=False)
+        hist.to_pickle(CACHE_FILE)
 
         print("✅ First cache created")
         return hist
 
-    hist = pd.read_parquet(CACHE_FILE)
+    hist = pd.read_pickle(CACHE_FILE)
     hist["DATE"] = pd.to_datetime(hist["DATE"], errors="coerce")
     hist = hist.dropna(subset=["DATE"])
 
@@ -733,7 +733,7 @@ latest_cash_date = hist_prices["DATE"].max()
 use_indicator_cache = False
 
 if os.path.exists(INDICATOR_CACHE_FILE):
-    cached_indicators = pd.read_parquet(INDICATOR_CACHE_FILE)
+    cached_indicators = pd.read_pickle(INDICATOR_CACHE_FILE)
 
     cached_indicators["DATE"] = pd.to_datetime(
         cached_indicators["DATE"],
@@ -955,7 +955,7 @@ if not use_indicator_cache:
 
     indicator_cache_save = latest_indicators.copy()
     indicator_cache_save["DATE"] = latest_date
-    indicator_cache_save.to_parquet(INDICATOR_CACHE_FILE, index=False)
+    indicator_cache_save.to_pickle(INDICATOR_CACHE_FILE, index=False)
 
     print("✅ Latest indicators cached")
 
