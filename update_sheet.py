@@ -272,7 +272,7 @@ def load_or_update_cash_cache(target_date):
 
             hist = hist[hist["DATE"].isin(keep_dates)].copy()
 
-            hist.to_parquet(CACHE_FILE, index=False)
+            hist.to_pickle(CACHE_FILE)
 
             print(f"✅ Cache updated with: {curr_date.strftime('%d-%b-%Y')}")
             print(f"✅ Cache rows: {len(hist)}")
