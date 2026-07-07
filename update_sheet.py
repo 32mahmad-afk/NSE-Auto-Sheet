@@ -1043,31 +1043,30 @@ try:
     headers = worksheet_final.row_values(1)
 
     symbol_col = headers.index("SYMBOL") + 1
-    days_col = headers.index("DAYS_IN_LIST") + 1
+    entry_date_col = headers.index("ENTRY_DATE") + 1
 
-    old_days_map = dict(
-    zip(
-        [
-            clean_symbol_value(x)
-            for x in worksheet_final.col_values(symbol_col)[1:]
-        ],
-        worksheet_final.col_values(days_col)[1:]
+    old_entry_date_map = dict(
+        zip(
+            [
+                clean_symbol_value(x)
+                for x in worksheet_final.col_values(symbol_col)[1:]
+            ],
+            worksheet_final.col_values(entry_date_col)[1:]
+        )
     )
-)
 
 except:
-    old_days_map = {}
+    old_entry_date_map = {}
 
-final_list["DAYS_IN_LIST"] = final_list["SYMBOL"].astype(str).map(
-    lambda x: int(old_days_map.get(clean_symbol_value(x), 0)) + 1
+
+current_scan_date = actual_date.strftime("%d-%b-%Y")
+
+final_list["ENTRY_DATE"] = final_list["SYMBOL"].astype(str).map(
+    lambda x: old_entry_date_map.get(
+        clean_symbol_value(x),
+        current_scan_date
+    )
 )
-
-final_list.loc[
-    final_list["SYMBOL"].apply(clean_symbol_value).isin(
-        new_list["SYMBOL"].apply(clean_symbol_value)
-    ),
-    "DAYS_IN_LIST"
-] = 1
 
 # =========================================================
 # TRADINGVIEW CLICKABLE LINK
@@ -1126,7 +1125,7 @@ for df in [final_df, final_list]:
 
 final_list = final_list[
     [
-        "DAYS_IN_LIST",
+        "ENTRY_DATE",
         "EMA_RSI",
         "EMA90_AGE",
         "EMA10_AGE",
@@ -1200,6 +1199,44 @@ worksheet_final.update(
     final_data,
     value_input_option="USER_ENTERED"
 )
+
+# Format DELIVERY_% column as Number (not Date)
+
+def format_number_column(ws, df, col_name):
+    if col_name in df.columns:
+        col_num = df.columns.get_loc(col_name) + 1
+        col_letter = chr(64 + col_num)
+
+        ws.format(
+            f"{col_letter}:{col_letter}",
+            {
+                "numberFormat": {
+                    "type": "NUMBER",
+                    "pattern": "0.00"
+                }
+            }
+        )
+
+worksheet_final.format(
+    "H:H",
+    {
+        "numberFormat": {
+            "type": "NUMBER",
+            "pattern": "0.00"
+        }
+    }
+)
+
+# ===============================
+# FORMAT DELIVERY_% COLUMN
+# ===============================
+
+format_number_column(worksheet_top, final_df, "DELIVERY_%")
+format_number_column(worksheet_final, final_list, "DELIVERY_%")
+
+# ===============================
+# STATUS UPDATE
+# ===============================
 
 ist_now = (
     datetime.utcnow() +
