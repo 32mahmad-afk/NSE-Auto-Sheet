@@ -1085,6 +1085,7 @@ for df in [final_df, final_list]:
 final_list = final_list[
     [
         "DAYS_IN_LIST",
+        "EMA_RSI",
         "EMA90_AGE",
         "RSI60_AGE",
         "OI_CHANGE_%",
