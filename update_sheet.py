@@ -40,7 +40,7 @@ print("🚀 Swing Institutional Scanner Started...")
 #fetched_date_str = target_date.strftime("%d-%b-%Y")
 
 #print(f"📅 Using Date: {fetched_date_str}")
-target_date = datetime(2026, 7, 7)
+target_date = datetime(2026, 7, 6)
 fetched_date_str = target_date.strftime("%d-%b-%Y")
 
 HEADERS = {
@@ -160,6 +160,127 @@ def clean_symbol_value(x):
             return x.strip().upper()
 
     return x.strip().upper()
+
+# =========================================================
+# CASH DATA CACHE - PHASE 2 SPEED OPTIMIZATION
+# =========================================================
+
+CACHE_DIR = "cache"
+
+CACHE_FILE = os.path.join(CACHE_DIR, "cash_700_days.parquet")
+
+INDICATOR_CACHE_FILE = os.path.join(
+    CACHE_DIR,
+    "latest_indicators.parquet"
+)
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+def fetch_single_cash_day(curr_date):
+    date_str = curr_date.strftime("%Y%m%d")
+
+    url = (
+        "https://nsearchives.nseindia.com/content/cm/"
+        f"BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
+    )
+
+    response = requests.get(url, headers=HEADERS, timeout=20)
+
+    if response.status_code != 200:
+        return None
+
+    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+        with z.open(z.namelist()[0]) as f:
+            df = pd.read_csv(f)
+
+    sym_col = next((c for c in ["TckrSymb", "SYMBOL"] if c in df.columns), None)
+    open_col = next((c for c in ["OpnPric", "OPEN"] if c in df.columns), None)
+    high_col = next((c for c in ["HghPric", "HIGH"] if c in df.columns), None)
+    low_col = next((c for c in ["LwPric", "LOW"] if c in df.columns), None)
+    close_col = next((c for c in ["ClsPric", "CLOSE"] if c in df.columns), None)
+    vol_col = next((c for c in ["TtlTradgVol", "TOTTRDQTY"] if c in df.columns), None)
+    series_col = next((c for c in ["SctySrs", "SERIES"] if c in df.columns), None)
+
+    if not all([sym_col, open_col, high_col, low_col, close_col, vol_col, series_col]):
+        return None
+
+    df = df[df[series_col].astype(str).str.strip() == "EQ"].copy()
+
+    df = df[[sym_col, open_col, high_col, low_col, close_col, vol_col]].copy()
+
+    df.columns = ["SYMBOL", "OPEN", "HIGH", "LOW", "CLOSE", "CASH_VOLUME"]
+
+    df["DATE"] = curr_date.strftime("%Y-%m-%d")
+    df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
+
+    for col in ["OPEN", "HIGH", "LOW", "CLOSE", "CASH_VOLUME"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df
+
+
+def load_or_update_cash_cache(target_date):
+    print("\n⚡ Loading / Updating 700-Day Cash Cache...")
+
+    if not os.path.exists(CACHE_FILE):
+        print("📦 Cache not found. First run will download 700 days...")
+        hist = fetch_historical_prices(target_date)
+
+        if hist is None or hist.empty:
+            return hist
+
+        hist["DATE"] = pd.to_datetime(hist["DATE"], errors="coerce")
+        hist.to_parquet(CACHE_FILE, index=False)
+
+        print("✅ First cache created")
+        return hist
+
+    hist = pd.read_parquet(CACHE_FILE)
+    hist["DATE"] = pd.to_datetime(hist["DATE"], errors="coerce")
+    hist = hist.dropna(subset=["DATE"])
+
+    latest_cached_date = hist["DATE"].max().date()
+
+    print(f"✅ Cache loaded till: {latest_cached_date}")
+
+    for attempt in range(10):
+        curr_date = get_previous_trading_day(target_date, attempt)
+        curr_date_only = curr_date.date()
+
+        if curr_date_only <= latest_cached_date:
+            print("✅ Cache already up to date")
+            return hist
+
+        latest_day_df = fetch_single_cash_day(curr_date)
+
+        if latest_day_df is not None and not latest_day_df.empty:
+            latest_day_df["DATE"] = pd.to_datetime(
+                latest_day_df["DATE"],
+                errors="coerce"
+            )
+
+            hist = pd.concat([hist, latest_day_df], ignore_index=True)
+
+            hist = hist.drop_duplicates(
+                subset=["DATE", "SYMBOL"],
+                keep="last"
+            )
+
+            unique_dates = sorted(hist["DATE"].dropna().unique())
+            keep_dates = unique_dates[-CONFIG["HISTORICAL_DAYS"]:]
+
+            hist = hist[hist["DATE"].isin(keep_dates)].copy()
+
+            hist.to_parquet(CACHE_FILE, index=False)
+
+            print(f"✅ Cache updated with: {curr_date.strftime('%d-%b-%Y')}")
+            print(f"✅ Cache rows: {len(hist)}")
+
+            return hist
+
+    print("⚠️ Latest cash day not found. Using old cache.")
+    return hist
 
 # =========================================================
 # HISTORICAL CASH DATA
@@ -577,7 +698,7 @@ def get_htf_zone(df, rule):
 # MAIN EXECUTION
 # =========================================================
 
-hist_prices = fetch_historical_prices(target_date)
+hist_prices = load_or_update_cash_cache(target_date)
 fo_df, actual_date = fetch_fo_data(target_date)
 
 index_symbols = [
@@ -603,201 +724,241 @@ print("\n⚙️ Calculating EMA RSI + Analysis...")
 hist_prices["DATE"] = pd.to_datetime(hist_prices["DATE"], errors="coerce")
 hist_prices = hist_prices.dropna(subset=["DATE"])
 
-hist_calc_list = []
+# ==========================
+# INDICATOR CACHE
+# ==========================
 
-for symbol, data in hist_prices.groupby("SYMBOL"):
+latest_cash_date = hist_prices["DATE"].max()
 
-    data = data.sort_values("DATE").copy()
+use_indicator_cache = False
 
-    data["EMA_AVG"] = calc_ema(
-        data["CLOSE"],
-        CONFIG["EMA_LEN"]
+if os.path.exists(INDICATOR_CACHE_FILE):
+    cached_indicators = pd.read_parquet(INDICATOR_CACHE_FILE)
+
+    cached_indicators["DATE"] = pd.to_datetime(
+        cached_indicators["DATE"],
+        errors="coerce"
     )
 
-    data["EMA_RSI"] = calc_rsi(
-        data["EMA_AVG"],
-        CONFIG["RSI_LEN"]
-    )
+    if cached_indicators["DATE"].max() == latest_cash_date:
+        print("⚡ Using cached latest indicators")
 
-    data["AVG_20_VOLUME"] = (
-        data["CASH_VOLUME"]
-        .rolling(20)
-        .mean()
-    )
-
-    data["VOL_SPIKE"] = (
-        data["CASH_VOLUME"]
-        / data["AVG_20_VOLUME"]
-    )
-
-    data["EMA_100"] = calc_ema(
-        data["CLOSE"],
-        100
-    )
-
-    data["TREND_STATUS"] = np.where(
-        data["CLOSE"] > data["EMA_100"],
-        "BULLISH",
-        "BEARISH"
-    )
-
-    # =====================================================
-    # DAILY / WEEKLY / MONTHLY RSI
-    # =====================================================
-
-    data["DAILY_RSI"] = calc_rsi(data["CLOSE"], 14)
-
-    temp = data[["DATE", "CLOSE"]].copy()
-    temp = temp.set_index("DATE")
-
-    weekly_close = temp["CLOSE"].resample("W").last().dropna()
-    monthly_close = temp["CLOSE"].resample("ME").last().dropna()
-
-    weekly_rsi = calc_rsi(weekly_close, 14)
-    monthly_rsi = calc_rsi(monthly_close, 14)
-
-    data["WEEKLY_RSI"] = weekly_rsi.reindex(
-        data["DATE"], method="ffill"
-    ).values
-
-    data["MONTHLY_RSI"] = monthly_rsi.reindex(
-        data["DATE"], method="ffill"
-    ).values
-
-    data["DAILY_RSI_CROSS_ABOVE_60"] = (
-         (data["DAILY_RSI"] > 60) &
-         (data["DAILY_RSI"].shift(1) <= 60)
-    )
-
-    data["DAILY_RSI_CROSS_BELOW_40"] = (
-         (data["DAILY_RSI"] < 40) &
-         (data["DAILY_RSI"].shift(1) >= 40)
-    )   
-
-    # =====================================================
-    # HTF DEMAND SUPPLY
-    # =====================================================
-
-    d_sup_top, d_sup_bot, d_dem_top, d_dem_bot = get_htf_zone(data, "D")
-    w_sup_top, w_sup_bot, w_dem_top, w_dem_bot = get_htf_zone(data, "W")
-    m_sup_top, m_sup_bot, m_dem_top, m_dem_bot = get_htf_zone(data, "ME")
-
-    last_close = data["CLOSE"].iloc[-1]
-
-    ZONE_BUFFER = 3
-
-    demand_hit = (
-        (
-            not np.isnan(d_dem_bot)
-            and last_close <= d_dem_top * (1 + ZONE_BUFFER / 100)
-            and last_close >= d_dem_bot * (1 - ZONE_BUFFER / 100)
+        latest_indicators = cached_indicators.drop(
+            columns=["DATE"],
+            errors="ignore"
         )
-        or
-        (
-            not np.isnan(w_dem_bot)
-            and last_close <= w_dem_top * (1 + ZONE_BUFFER / 100)
-            and last_close >= w_dem_bot * (1 - ZONE_BUFFER / 100)
+
+        use_indicator_cache = True
+
+# ==========================
+# INDICATOR CALCULATION / CACHE
+# ==========================
+
+if not use_indicator_cache:
+
+    hist_calc_list = []
+
+    for symbol, data in hist_prices.groupby("SYMBOL"):
+
+        data = data.sort_values("DATE").copy()
+
+        data["EMA_AVG"] = calc_ema(
+            data["CLOSE"],
+            CONFIG["EMA_LEN"]
         )
-        or
-        (
-            not np.isnan(m_dem_bot)
-            and last_close <= m_dem_top * (1 + ZONE_BUFFER / 100)
-            and last_close >= m_dem_bot * (1 - ZONE_BUFFER / 100)
+
+        data["EMA_RSI"] = calc_rsi(
+            data["EMA_AVG"],
+            CONFIG["RSI_LEN"]
         )
-    )
 
-    supply_hit = (
-        (
-            not np.isnan(d_sup_bot)
-            and last_close <= d_sup_top * (1 + ZONE_BUFFER / 100)
-            and last_close >= d_sup_bot * (1 - ZONE_BUFFER / 100)
+        data["AVG_20_VOLUME"] = (
+            data["CASH_VOLUME"]
+            .rolling(20)
+            .mean()
         )
-        or
-        (
-            not np.isnan(w_sup_bot)
-            and last_close <= w_sup_top * (1 + ZONE_BUFFER / 100)
-            and last_close >= w_sup_bot * (1 - ZONE_BUFFER / 100)
+
+        data["VOL_SPIKE"] = (
+            data["CASH_VOLUME"]
+            / data["AVG_20_VOLUME"]
         )
-        or
-        (
-            not np.isnan(m_sup_bot)
-            and last_close <= m_sup_top * (1 + ZONE_BUFFER / 100)
-            and last_close >= m_sup_bot * (1 - ZONE_BUFFER / 100)
+
+        data["EMA_100"] = calc_ema(
+            data["CLOSE"],
+            100
         )
-    )
 
-    data["NEAR_DEMAND_ZONE"] = (
-        "YES" if demand_hit else "NO"
-    )
+        data["TREND_STATUS"] = np.where(
+            data["CLOSE"] > data["EMA_100"],
+            "BULLISH",
+            "BEARISH"
+        )
 
-    data["NEAR_SUPPLY_ZONE"] = (
-        "YES" if supply_hit else "NO"
-    )
+        # =====================================================
+        # DAILY / WEEKLY / MONTHLY RSI
+        # =====================================================
 
-    # =====================================================
-    # PRICE CHANGE
-    # =====================================================
+        data["DAILY_RSI"] = calc_rsi(data["CLOSE"], 14)
 
-    data["PRICE_CHANGE_%"] = (
-        data["CLOSE"].pct_change() * 100
-    )
+        temp = data[["DATE", "CLOSE"]].copy()
+        temp = temp.set_index("DATE")
 
-    data["SYMBOL"] = symbol
+        weekly_close = temp["CLOSE"].resample("W").last().dropna()
+        monthly_close = temp["CLOSE"].resample("ME").last().dropna()
 
-    data["EMA90_AGE"] = (
-        data["EMA_RSI"].ge(90)
-        .groupby((data["EMA_RSI"].lt(90)).cumsum())
-        .cumcount() + 1
-    )
-    data.loc[data["EMA_RSI"] < 90, "EMA90_AGE"] = 0
+        weekly_rsi = calc_rsi(weekly_close, 14)
+        monthly_rsi = calc_rsi(monthly_close, 14)
 
-    data["RSI60_AGE"] = (
-        data["DAILY_RSI"].gt(60)
-        .groupby((data["DAILY_RSI"].le(60)).cumsum())
-        .cumcount() + 1
-    )
-    data.loc[data["DAILY_RSI"] <= 60, "RSI60_AGE"] = 0
+        data["WEEKLY_RSI"] = weekly_rsi.reindex(
+            data["DATE"], method="ffill"
+        ).values
 
-    data["EMA10_AGE"] = (
-    data["EMA_RSI"].le(10)
-    .groupby((data["EMA_RSI"].gt(10)).cumsum())
-    .cumcount() + 1
-    )
-    data.loc[data["EMA_RSI"] > 10, "EMA10_AGE"] = 0
+        data["MONTHLY_RSI"] = monthly_rsi.reindex(
+            data["DATE"], method="ffill"
+        ).values
 
-    data["RSI40_AGE"] = (
-        data["DAILY_RSI"].lt(40)
-        .groupby((data["DAILY_RSI"].ge(40)).cumsum())
-        .cumcount() + 1
-    )
-    data.loc[data["DAILY_RSI"] >= 40, "RSI40_AGE"] = 0
-    hist_calc_list.append(data)
+        data["DAILY_RSI_CROSS_ABOVE_60"] = (
+            (data["DAILY_RSI"] > 60) &
+            (data["DAILY_RSI"].shift(1) <= 60)
+        )
 
-hist_calc = pd.concat(hist_calc_list, ignore_index=True)
+        data["DAILY_RSI_CROSS_BELOW_40"] = (
+            (data["DAILY_RSI"] < 40) &
+            (data["DAILY_RSI"].shift(1) >= 40)
+        )
 
-latest_date = hist_calc["DATE"].max()
+        # =====================================================
+        # HTF DEMAND SUPPLY
+        # =====================================================
 
-latest_indicators = hist_calc[
-    hist_calc["DATE"] == latest_date
-][[
-    "SYMBOL",
-    "CLOSE",
-    "EMA_RSI",
-    "DAILY_RSI",
-    "WEEKLY_RSI",
-    "MONTHLY_RSI",
-    "EMA90_AGE",
-    "EMA10_AGE",
-    "RSI60_AGE",
-    "RSI40_AGE",
-    "DAILY_RSI_CROSS_ABOVE_60",
-    "DAILY_RSI_CROSS_BELOW_40",
-    "VOL_SPIKE",
-    "TREND_STATUS",
-    "NEAR_DEMAND_ZONE",
-    "NEAR_SUPPLY_ZONE",
-    "PRICE_CHANGE_%"
-]].copy()
+        d_sup_top, d_sup_bot, d_dem_top, d_dem_bot = get_htf_zone(data, "D")
+        w_sup_top, w_sup_bot, w_dem_top, w_dem_bot = get_htf_zone(data, "W")
+        m_sup_top, m_sup_bot, m_dem_top, m_dem_bot = get_htf_zone(data, "ME")
+
+        last_close = data["CLOSE"].iloc[-1]
+
+        ZONE_BUFFER = 3
+
+        demand_hit = (
+            (
+                not np.isnan(d_dem_bot)
+                and last_close <= d_dem_top * (1 + ZONE_BUFFER / 100)
+                and last_close >= d_dem_bot * (1 - ZONE_BUFFER / 100)
+            )
+            or
+            (
+                not np.isnan(w_dem_bot)
+                and last_close <= w_dem_top * (1 + ZONE_BUFFER / 100)
+                and last_close >= w_dem_bot * (1 - ZONE_BUFFER / 100)
+            )
+            or
+            (
+                not np.isnan(m_dem_bot)
+                and last_close <= m_dem_top * (1 + ZONE_BUFFER / 100)
+                and last_close >= m_dem_bot * (1 - ZONE_BUFFER / 100)
+            )
+        )
+
+        supply_hit = (
+            (
+                not np.isnan(d_sup_bot)
+                and last_close <= d_sup_top * (1 + ZONE_BUFFER / 100)
+                and last_close >= d_sup_bot * (1 - ZONE_BUFFER / 100)
+            )
+            or
+            (
+                not np.isnan(w_sup_bot)
+                and last_close <= w_sup_top * (1 + ZONE_BUFFER / 100)
+                and last_close >= w_sup_bot * (1 - ZONE_BUFFER / 100)
+            )
+            or
+            (
+                not np.isnan(m_sup_bot)
+                and last_close <= m_sup_top * (1 + ZONE_BUFFER / 100)
+                and last_close >= m_sup_bot * (1 - ZONE_BUFFER / 100)
+            )
+        )
+
+        data["NEAR_DEMAND_ZONE"] = (
+            "YES" if demand_hit else "NO"
+        )
+
+        data["NEAR_SUPPLY_ZONE"] = (
+            "YES" if supply_hit else "NO"
+        )
+
+        # =====================================================
+        # PRICE CHANGE
+        # =====================================================
+
+        data["PRICE_CHANGE_%"] = (
+            data["CLOSE"].pct_change() * 100
+        )
+
+        data["SYMBOL"] = symbol
+
+        data["EMA90_AGE"] = (
+            data["EMA_RSI"].ge(90)
+            .groupby((data["EMA_RSI"].lt(90)).cumsum())
+            .cumcount() + 1
+        )
+        data.loc[data["EMA_RSI"] < 90, "EMA90_AGE"] = 0
+
+        data["RSI60_AGE"] = (
+            data["DAILY_RSI"].gt(60)
+            .groupby((data["DAILY_RSI"].le(60)).cumsum())
+            .cumcount() + 1
+        )
+        data.loc[data["DAILY_RSI"] <= 60, "RSI60_AGE"] = 0
+
+        data["EMA10_AGE"] = (
+            data["EMA_RSI"].le(10)
+            .groupby((data["EMA_RSI"].gt(10)).cumsum())
+            .cumcount() + 1
+        )
+        data.loc[data["EMA_RSI"] > 10, "EMA10_AGE"] = 0
+
+        data["RSI40_AGE"] = (
+            data["DAILY_RSI"].lt(40)
+            .groupby((data["DAILY_RSI"].ge(40)).cumsum())
+            .cumcount() + 1
+        )
+        data.loc[data["DAILY_RSI"] >= 40, "RSI40_AGE"] = 0
+
+        hist_calc_list.append(data)
+
+    hist_calc = pd.concat(hist_calc_list, ignore_index=True)
+
+    latest_date = hist_calc["DATE"].max()
+
+    latest_indicators = hist_calc[
+        hist_calc["DATE"] == latest_date
+    ][[
+        "SYMBOL",
+        "CLOSE",
+        "EMA_RSI",
+        "DAILY_RSI",
+        "WEEKLY_RSI",
+        "MONTHLY_RSI",
+        "EMA90_AGE",
+        "EMA10_AGE",
+        "RSI60_AGE",
+        "RSI40_AGE",
+        "DAILY_RSI_CROSS_ABOVE_60",
+        "DAILY_RSI_CROSS_BELOW_40",
+        "VOL_SPIKE",
+        "TREND_STATUS",
+        "NEAR_DEMAND_ZONE",
+        "NEAR_SUPPLY_ZONE",
+        "PRICE_CHANGE_%"
+    ]].copy()
+
+    indicator_cache_save = latest_indicators.copy()
+    indicator_cache_save["DATE"] = latest_date
+    indicator_cache_save.to_parquet(INDICATOR_CACHE_FILE, index=False)
+
+    print("✅ Latest indicators cached")
+
 final_df = pd.merge(
     fo_df,
     latest_indicators,
@@ -1216,16 +1377,6 @@ def format_number_column(ws, df, col_name):
                 }
             }
         )
-
-worksheet_final.format(
-    "H:H",
-    {
-        "numberFormat": {
-            "type": "NUMBER",
-            "pattern": "0.00"
-        }
-    }
-)
 
 # ===============================
 # FORMAT DELIVERY_% COLUMN
