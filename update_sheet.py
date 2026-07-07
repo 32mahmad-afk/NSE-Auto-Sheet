@@ -150,6 +150,16 @@ def calc_rsi(series, length):
 
     return rsi.replace([np.inf, -np.inf], np.nan)
 
+def clean_symbol_value(x):
+    x = str(x).strip()
+
+    if "HYPERLINK" in x.upper():
+        try:
+            return x.split('","')[-1].replace('")', '').replace('"', '').strip().upper()
+        except:
+            return x.strip().upper()
+
+    return x.strip().upper()
 
 # =========================================================
 # HISTORICAL CASH DATA
@@ -965,14 +975,14 @@ try:
 
     old_symbols = worksheet_final.col_values(symbol_col)[1:]
     old_symbols = [
-        str(x).strip().upper()
-        for x in old_symbols
-        if str(x).strip() != ""
+         clean_symbol_value(x)
+         for x in old_symbols
+         if str(x).strip() != ""
     ]
 except:
     old_symbols = []
 
-current_list["SYMBOL_KEY"] = current_list["SYMBOL"].astype(str).str.strip().str.upper()
+current_list["SYMBOL_KEY"] = current_list["SYMBOL"].apply(clean_symbol_value)
 
 new_list = current_list[
     ~current_list["SYMBOL_KEY"].isin(old_symbols)
@@ -1009,21 +1019,26 @@ try:
     days_col = headers.index("DAYS_IN_LIST") + 1
 
     old_days_map = dict(
-        zip(
-            worksheet_final.col_values(symbol_col)[1:],
-            worksheet_final.col_values(days_col)[1:]
-        )
+    zip(
+        [
+            clean_symbol_value(x)
+            for x in worksheet_final.col_values(symbol_col)[1:]
+        ],
+        worksheet_final.col_values(days_col)[1:]
     )
+)
 
 except:
     old_days_map = {}
 
 final_list["DAYS_IN_LIST"] = final_list["SYMBOL"].astype(str).map(
-    lambda x: int(old_days_map.get(x, 0)) + 1
+    lambda x: int(old_days_map.get(clean_symbol_value(x), 0)) + 1
 )
 
 final_list.loc[
-    final_list["SYMBOL"].isin(new_list["SYMBOL"]),
+    final_list["SYMBOL"].apply(clean_symbol_value).isin(
+        new_list["SYMBOL"].apply(clean_symbol_value)
+    ),
     "DAYS_IN_LIST"
 ] = 1
 
