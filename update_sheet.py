@@ -40,8 +40,25 @@ print("🚀 Swing Institutional Scanner Started...")
 #fetched_date_str = target_date.strftime("%d-%b-%Y")
 
 #print(f"📅 Using Date: {fetched_date_str}")
-target_date = datetime(2026, 7, 7)
+#target_date = datetime(2026, 7, 7)
+#fetched_date_str = target_date.strftime("%d-%b-%Y")
+
+def get_latest_trading_date():
+    today = datetime.utcnow() + timedelta(hours=5, minutes=30)
+
+    for i in range(10):
+        test_date = today - timedelta(days=i)
+
+        if test_date.weekday() < 5:
+            return test_date
+
+    return today
+
+
+target_date = get_latest_trading_date()
 fetched_date_str = target_date.strftime("%d-%b-%Y")
+
+print(f"📅 Using Date: {fetched_date_str}")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -173,6 +190,10 @@ INDICATOR_CACHE_FILE = os.path.join(
     CACHE_DIR,
     "latest_indicators.pkl"
 )
+
+FO_CACHE_FILE = os.path.join(CACHE_DIR, "fo_latest.pkl")
+PREV_OI_CACHE_FILE = os.path.join(CACHE_DIR, "prev_oi_latest.pkl")
+DELIVERY_CACHE_FILE = os.path.join(CACHE_DIR, "delivery_latest.pkl")
 
 os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -622,6 +643,92 @@ def fetch_delivery_data(actual_date):
     except Exception as e:
         print(f"❌ Delivery Error: {e}")
         return None
+
+# =========================================================
+# FO / PREVIOUS OI / DELIVERY CACHE HELPERS
+# =========================================================
+
+def load_or_fetch_fo_cache(target_date):
+    if os.path.exists(FO_CACHE_FILE):
+        data = pd.read_pickle(FO_CACHE_FILE)
+        fo_df = data.get("fo_df")
+        cache_date = data.get("actual_date")
+
+        if cache_date is not None:
+            cache_date = pd.to_datetime(cache_date).to_pydatetime()
+
+            if cache_date.date() == target_date.date():
+                print("⚡ Using cached FO data")
+                return fo_df, cache_date
+
+    fo_df, actual_date = fetch_fo_data(target_date)
+
+    if fo_df is not None and actual_date is not None:
+        pd.to_pickle(
+            {
+                "fo_df": fo_df,
+                "actual_date": actual_date
+            },
+            FO_CACHE_FILE
+        )
+
+    return fo_df, actual_date
+
+
+def load_or_fetch_prev_oi_cache(actual_date):
+    if os.path.exists(PREV_OI_CACHE_FILE):
+        data = pd.read_pickle(PREV_OI_CACHE_FILE)
+        prev_oi_df = data.get("prev_oi_df")
+        cache_date = data.get("actual_date")
+
+        if cache_date is not None:
+            cache_date = pd.to_datetime(cache_date).to_pydatetime()
+
+            if cache_date.date() == actual_date.date():
+                print("⚡ Using cached Previous OI data")
+                return prev_oi_df
+
+    prev_oi_df = fetch_previous_fo_oi(actual_date)
+
+    if prev_oi_df is not None:
+        pd.to_pickle(
+            {
+                "prev_oi_df": prev_oi_df,
+                "actual_date": actual_date
+            },
+            PREV_OI_CACHE_FILE
+        )
+
+    return prev_oi_df
+
+
+def load_or_fetch_delivery_cache(actual_date):
+    if os.path.exists(DELIVERY_CACHE_FILE):
+        data = pd.read_pickle(DELIVERY_CACHE_FILE)
+        delivery_df = data.get("delivery_df")
+        cache_date = data.get("actual_date")
+
+        if cache_date is not None:
+            cache_date = pd.to_datetime(cache_date).to_pydatetime()
+
+            if cache_date.date() == actual_date.date():
+                print("⚡ Using cached Delivery data")
+                return delivery_df
+
+    delivery_df = fetch_delivery_data(actual_date)
+
+    if delivery_df is not None:
+        pd.to_pickle(
+            {
+                "delivery_df": delivery_df,
+                "actual_date": actual_date
+            },
+            DELIVERY_CACHE_FILE
+        )
+
+    return delivery_df
+
+
 HTF_PRD = 10
 ZONE_PER = 0.2
 
@@ -699,7 +806,7 @@ def get_htf_zone(df, rule):
 # =========================================================
 
 hist_prices = load_or_update_cash_cache(target_date)
-fo_df, actual_date = fetch_fo_data(target_date)
+fo_df, actual_date = load_or_fetch_fo_cache(target_date)
 
 index_symbols = [
     "NIFTY",
@@ -985,7 +1092,7 @@ for col in [
 # MERGE DELIVERY
 # =========================================================
 
-delivery_df = fetch_delivery_data(actual_date)
+delivery_df = load_or_fetch_delivery_cache(actual_date)
 
 if delivery_df is not None:
     final_df = pd.merge(
@@ -1006,7 +1113,7 @@ final_df["DELIVERY_%"] = pd.to_numeric(
 # REAL OI CHANGE %
 # =========================================================
 
-prev_oi_df = fetch_previous_fo_oi(actual_date)
+prev_oi_df = load_or_fetch_prev_oi_cache(actual_date)
 
 if prev_oi_df is not None:
     final_df = pd.merge(
