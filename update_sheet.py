@@ -657,7 +657,7 @@ def load_or_fetch_fo_cache(target_date):
         if cache_date is not None:
             cache_date = pd.to_datetime(cache_date).to_pydatetime()
 
-            if cache_date.date() == get_previous_trading_day(target_date).date():
+            if cache_date.date() <= target_date.date():
                 print("⚡ Using cached FO data")
                 return fo_df, cache_date
 
